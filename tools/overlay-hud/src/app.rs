@@ -365,25 +365,78 @@ impl OverlayApp {
 
         // Reserve the label row above the sliders and the slim selector row
         // below, so the sliders can never push that row off the panel.
-        let h = (ui.available_height() - 22.0 - COMBO_ROW_H - GAP).max(70.0);
+        let h = (ui.available_height() - 2.0 * (SETUP_SIZE + GAP) - 24.0).max(70.0);
         let w = ((ui.available_width() - GAP * 3.0) / 4.0).floor().max(48.0);
 
         let mut patch = serde_json::Map::new();
+        let pad = ((w - SETUP_SIZE) * 0.5).max(0.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
-            if v_slider(ui, &mut self.speed, &mut self.speed_active, 1.0, limit, 1.0, "SPEED", w, h) {
-                patch.insert("speed".into(), serde_json::Value::from(self.speed));
-            }
-            if v_slider(ui, &mut self.depth, &mut self.depth_active, 0.0, travel, 5.0, "DEPTH", w, h) {
-                patch.insert("depth".into(), serde_json::Value::from(self.depth));
-            }
-            if v_slider(ui, &mut self.stroke, &mut self.stroke_active, 0.0, stroke_max, 5.0, "STROKE", w, h) {
-                patch.insert("stroke".into(), serde_json::Value::from(self.stroke));
-            }
-            // Sensation is bipolar (-100 .. 100). Same widget, same style: the
-            // thumb sits mid-rail at zero and the fill grows downward from it.
-            if v_slider(ui, &mut self.sensation, &mut self.sensation_active, -100.0, 100.0, 5.0, "SENSATION", w, h) {
-                patch.insert("sensation".into(), serde_json::Value::from(self.sensation));
+            for col in 0..4usize {
+                ui.vertical(|ui| {
+                    // Each column owns its own controls: column 1 carries Start and
+                    // Pattern, column 3 carries T and the depth crosshair, and the
+                    // middle columns stay clear so the faders line up.
+                    match col {
+                        0 => {
+                            ui.horizontal(|ui| {
+                                ui.add_space(pad);
+                                self.big_button(ui);
+                            });
+                        }
+                        2 => {
+                            ui.horizontal(|ui| {
+                                ui.add_space(pad);
+                                self.keep_start_button(ui);
+                            });
+                        }
+                        _ => {
+                            ui.add_space(SETUP_SIZE);
+                        }
+                    }
+                    ui.add_space(GAP);
+                    match col {
+                        0 => {
+                            if v_slider(ui, &mut self.speed, &mut self.speed_active, 1.0, limit, 1.0, "SPEED", w, h) {
+                                patch.insert("speed".into(), serde_json::Value::from(self.speed));
+                            }
+                        }
+                        1 => {
+                            if v_slider(ui, &mut self.depth, &mut self.depth_active, 0.0, travel, 5.0, "DEPTH", w, h) {
+                                patch.insert("depth".into(), serde_json::Value::from(self.depth));
+                            }
+                        }
+                        2 => {
+                            if v_slider(ui, &mut self.stroke, &mut self.stroke_active, 0.0, stroke_max, 5.0, "STROKE", w, h) {
+                                patch.insert("stroke".into(), serde_json::Value::from(self.stroke));
+                            }
+                        }
+                        _ => {
+                            // Sensation is bipolar (-100 .. 100), same widget.
+                            if v_slider(ui, &mut self.sensation, &mut self.sensation_active, -100.0, 100.0, 5.0, "SENSATION", w, h) {
+                                patch.insert("sensation".into(), serde_json::Value::from(self.sensation));
+                            }
+                        }
+                    }
+                    ui.add_space(GAP);
+                    match col {
+                        0 => {
+                            ui.horizontal(|ui| {
+                                ui.add_space(pad);
+                                self.pattern_button(ui);
+                            });
+                        }
+                        2 => {
+                            ui.horizontal(|ui| {
+                                ui.add_space(pad);
+                                self.setup_button(ui);
+                            });
+                        }
+                        _ => {
+                            ui.add_space(SETUP_SIZE);
+                        }
+                    }
+                });
             }
         });
         if !patch.is_empty() {
@@ -602,14 +655,6 @@ impl eframe::App for OverlayApp {
         egui::CentralPanel::default().frame(panel).show(ui, |ui| {
             self.grip(ui);
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                self.big_button(ui);
-                self.pattern_button(ui);
-                self.setup_button(ui);
-                self.keep_start_button(ui);
-            });
-            ui.add_space(8.0);
             self.sliders_row(ui);
         });
 
@@ -653,10 +698,45 @@ fn v_slider(
         // Room on the left for a vertical label; the rail shifts right of it.
         const LABEL_COL: f32 = 13.0;
         let rail_w = ((rect.width() - LABEL_COL) * 0.62).clamp(16.0, 26.0);
-        let rail = Rect::from_center_size(
-            egui::pos2(rect.center().x + LABEL_COL * 0.5, rect.center().y),
-            egui::vec2(rail_w, rect.height()),
+        // Two nudge caps: one step per press, for fine work at a distance.
+        const CAP: f32 = 15.0;
+        let inner_h = (rect.height() - 2.0 * (CAP + 3.0)).max(50.0);
+        let cx = rect.center().x + LABEL_COL * 0.5;
+        let rail = Rect::from_center_size(egui::pos2(cx, rect.center().y), egui::vec2(rail_w, inner_h));
+        let up_rect = Rect::from_center_size(
+            egui::pos2(cx, rect.top() + CAP * 0.5),
+            egui::vec2(CAP, CAP),
         );
+        let dn_rect = Rect::from_center_size(
+            egui::pos2(cx, rect.bottom() - CAP * 0.5),
+            egui::vec2(CAP, CAP),
+        );
+        let up_resp = ui.interact(up_rect, ui.id().with((label, "nudge_up")), Sense::click());
+        let dn_resp = ui.interact(dn_rect, ui.id().with((label, "nudge_dn")), Sense::click());
+        if up_resp.clicked() {
+            *value = (*value + step).clamp(min, max);
+            sent = true;
+        }
+        if dn_resp.clicked() {
+            *value = (*value - step).clamp(min, max);
+            sent = true;
+        }
+        for (r, up, hot_cap) in [(up_rect, true, up_resp.hovered()), (dn_rect, false, dn_resp.hovered())] {
+            ui.painter().rect_filled(
+                r,
+                CornerRadius::same(6),
+                if hot_cap { combo_hot() } else { combo_fill() },
+            );
+            let ink = Color32::from_rgb(226, 230, 244);
+            let c = r.center();
+            let a = 3.5;
+            let pts = if up {
+                vec![egui::pos2(c.x - a, c.y + a * 0.6), egui::pos2(c.x + a, c.y + a * 0.6), egui::pos2(c.x, c.y - a * 0.7)]
+            } else {
+                vec![egui::pos2(c.x - a, c.y - a * 0.6), egui::pos2(c.x + a, c.y - a * 0.6), egui::pos2(c.x, c.y + a * 0.7)]
+            };
+            ui.painter().add(egui::Shape::convex_polygon(pts, ink, egui::Stroke::NONE));
+        }
         let lgalley = ui.painter().layout_no_wrap(
             label.to_owned(),
             FontId::proportional(10.0),
@@ -674,8 +754,8 @@ fn v_slider(
 
         // The thumb travels between the rail ends, so map the pointer over that
         // same range and the thumb always lands under it.
-        let travel_top = rail.top() + THUMB_H / 2.0;
-        let travel_bot = rail.bottom() - THUMB_H / 2.0;
+        let travel_top = rail.top() + THUMB_H * 0.6;
+        let travel_bot = rail.bottom() - THUMB_H * 0.6;
         let span = (travel_bot - travel_top).max(1.0);
 
         if (resp.dragged() || resp.clicked()) && max > min {
@@ -698,16 +778,12 @@ fn v_slider(
 
         let painter = ui.painter();
         painter.rect_filled(rail, radius, rail_c());
-        if t > 0.001 {
-            let filled = Rect::from_min_max(egui::pos2(rail.left(), thumb_y), rail.max);
-            painter.rect_filled(filled, radius, fill_c());
-        }
 
         // The handle is exactly as wide as its rail: one continuous instrument
         // rather than a fat block on a thin stick.
         let thumb = Rect::from_center_size(
             egui::pos2(rect.center().x, thumb_y),
-            egui::vec2(rail_w, THUMB_H),
+            egui::vec2(rail_w, THUMB_H * 2.1),
         );
         let hot = resp.hovered() || resp.dragged();
         painter.rect_filled(thumb, CornerRadius::same(11), if hot { thumb_hot_c() } else { thumb_c() });
