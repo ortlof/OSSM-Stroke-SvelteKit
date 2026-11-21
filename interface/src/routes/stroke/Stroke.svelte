@@ -35,6 +35,7 @@
 		max_speed: number;
 		user_speed_limit: number;
 		reversal_acceleration_factor: number;
+		home_margin: number;
 	}
 
 	interface PatternList {
@@ -63,7 +64,12 @@
 	});
 
 	let patterns: string[] = $state([]);
-	let tuning: StrokeTuning = $state({ max_speed: 700, user_speed_limit: 650, reversal_acceleration_factor: 0.7 });
+	let tuning: StrokeTuning = $state({
+		max_speed: 700,
+		user_speed_limit: 650,
+		reversal_acceleration_factor: 0.7,
+		home_margin: 15
+	});
 	// The engine confines depth and stroke to the travel minus both keepout
 	// zones, so the sliders use that range, not the full measured travel.
 	let travel = $derived(state.usable_travel > 0 ? state.usable_travel : 420);
@@ -109,7 +115,8 @@
 				tuning = {
 					max_speed: all.max_speed,
 					user_speed_limit: all.user_speed_limit,
-					reversal_acceleration_factor: all.reversal_acceleration_factor
+					reversal_acceleration_factor: all.reversal_acceleration_factor,
+					home_margin: all.home_margin
 				};
 			}
 		} catch (error) {
@@ -129,7 +136,8 @@
 				tuning = {
 					max_speed: all.max_speed,
 					user_speed_limit: all.user_speed_limit,
-					reversal_acceleration_factor: all.reversal_acceleration_factor
+					reversal_acceleration_factor: all.reversal_acceleration_factor,
+					home_margin: all.home_margin
 				};
 			} else {
 				notifications.error('Setting rejected (' + response.status + ')', 3000);
@@ -347,6 +355,25 @@
 				<div class="label">
 					Every stroke reverses, so this factor decides how much acceleration a turnaround gets. Higher is
 					faster and louder; the gearbox backlash is what the low default protects.
+				</div>
+			</div>
+
+			<div class="fieldset">
+				<label class="label" for="margin">Keep this far off the home point ({tuning.home_margin.toFixed(0)} mm)</label>
+				<input
+					id="margin"
+					type="range"
+					class="range range-secondary"
+					min="0"
+					max="50"
+					step="5"
+					bind:value={tuning.home_margin}
+					onchange={() => saveTuning({ home_margin: tuning.home_margin })}
+				/>
+				<div class="label">
+					The near end of a sweep stays this far from the home position, so a Stroke can never be as long
+					as the Depth. Distinct from the keepout the engine already applies: this one guards against the
+					homing run stopping a little late against the end of the rail. 0 gives the full travel back.
 				</div>
 			</div>
 

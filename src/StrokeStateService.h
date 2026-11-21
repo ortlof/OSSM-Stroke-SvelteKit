@@ -30,6 +30,8 @@
 // needs it, and that updater runs under the state mutex, so it arrives as a
 // plain global instead of a parameter.
 extern volatile float strokeUsableTravelMm;
+extern volatile float strokeHomeMarginMm;
+extern volatile float strokeFarMarginMm;
 
 class StrokeState
 {
@@ -123,9 +125,20 @@ public:
         // Consistency guard. The engine confines the sweep to [0, usable] and
         // clamps silently, so keep both values inside that range here. Otherwise
         // a slider position and the machine would disagree.
+        //
+        // The near end of the sweep keeps a margin of its own away from the home
+        // position, because a sweep that starts at 0 runs back to the homing
+        // point on every stroke, and homing can stop a little late. That also
+        // means a stroke can never be as long as the depth.
         const float usable = strokeUsableTravelMm;
-        depth = constrain(depth, 0.0f, usable);
-        stroke = constrain(stroke, 0.0f, depth);
+        const float margin = (strokeHomeMarginMm < usable) ? strokeHomeMarginMm : usable;
+        const float farSpace = (strokeFarMarginMm < usable) ? strokeFarMarginMm : 0.0f;
+        float maxDepth = usable - farSpace;
+        if (maxDepth < 0.0f) maxDepth = 0.0f;
+        depth = constrain(depth, 0.0f, maxDepth);
+        float maxStroke = depth - margin;
+        if (maxStroke < 0.0f) maxStroke = 0.0f;
+        stroke = constrain(stroke, 0.0f, maxStroke);
 
         if (run == state.run && home == state.home && keepStrokeStart == state.keepStrokeStart &&
             setup == state.setup &&

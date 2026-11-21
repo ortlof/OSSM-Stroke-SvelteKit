@@ -13,6 +13,13 @@
 
 #include <Arduino.h>
 
+// The drive's own ceiling: 4200 rpm maximum through a 20:1 gearbox and a 60 mm
+// pitch pinion. Commanding a faster step train does not make the machine faster,
+// it makes the drive lose position, and the carriage then carries its momentum
+// into whatever is in front of it.
+#define DRIVE_MAX_SPEED_MM_PER_SECOND 660.0f
+
+
 #include <ESP32SvelteKit.h>
 #include <FSPersistence.h>
 #include <HttpEndpoint.h>
@@ -54,6 +61,14 @@ public:
     bool invert_direction = true;
     bool sensorless_homing = true;  // true: current sensing, false: end stop switch
 
+    // How far the near end of a sweep keeps away from the home position. The
+    // engine declares the home position keepout away from the stall that homing
+    // finds, so a sweep that starts at 0 returns to the homing point on every
+    // stroke. If homing stops a little late against the end of the rail, that
+    // point is already too far out, so keep a margin of its own.
+    float home_margin = 15.0;  // mm, 0 .. 50
+    float far_margin = 15.0;   // mm, 0 .. 50
+
     // How much of max_acceleration a direction change may use. A geared rack and
     // pinion with backlash slams its gear train at a full acceleration reversal,
     // and on a stroking machine every move reverses, so this factor decides both
@@ -71,6 +86,8 @@ public:
         root["invert_direction"] = settings.invert_direction;
         root["sensorless_homing"] = settings.sensorless_homing;
         root["reversal_acceleration_factor"] = settings.reversal_acceleration_factor;
+        root["home_margin"] = settings.home_margin;
+        root["far_margin"] = settings.far_margin;
     }
 
     static StateUpdateResult update(JsonObject &root, StrokeSettings &settings, const String &originId)
@@ -79,12 +96,17 @@ public:
         float keepout = root["keepout"] | settings.keepout;
         float steps_per_mm = root["steps_per_mm"] | settings.steps_per_mm;
         float max_speed = root["max_speed"] | settings.max_speed;
+        max_speed = constrain(max_speed, 1.0f, DRIVE_MAX_SPEED_MM_PER_SECOND);
         float max_acceleration = root["max_acceleration"] | settings.max_acceleration;
         float user_speed_limit = root["user_speed_limit"] | settings.user_speed_limit;
         bool invert_direction = root["invert_direction"] | settings.invert_direction;
         bool sensorless_homing = root["sensorless_homing"] | settings.sensorless_homing;
         float reversal = root["reversal_acceleration_factor"] | settings.reversal_acceleration_factor;
         reversal = constrain(reversal, 0.05f, 1.0f);
+        float homeMargin = root["home_margin"] | settings.home_margin;
+        homeMargin = constrain(homeMargin, 0.0f, 50.0f);
+        float farMargin = root["far_margin"] | settings.far_margin;
+        farMargin = constrain(farMargin, 0.0f, 50.0f);
 
         if (physical_travel == settings.physical_travel && keepout == settings.keepout &&
             steps_per_mm == settings.steps_per_mm && max_speed == settings.max_speed &&
@@ -92,7 +114,9 @@ public:
             user_speed_limit == settings.user_speed_limit &&
             invert_direction == settings.invert_direction &&
             sensorless_homing == settings.sensorless_homing &&
-            reversal == settings.reversal_acceleration_factor)
+            reversal == settings.reversal_acceleration_factor &&
+            homeMargin == settings.home_margin &&
+            farMargin == settings.far_margin)
         {
             return StateUpdateResult::UNCHANGED;
         }
@@ -106,6 +130,8 @@ public:
         settings.invert_direction = invert_direction;
         settings.sensorless_homing = sensorless_homing;
         settings.reversal_acceleration_factor = reversal;
+        settings.home_margin = homeMargin;
+        settings.far_margin = farMargin;
         return StateUpdateResult::CHANGED;
     }
 };

@@ -80,6 +80,8 @@ static int appliedSetupMode = 0;
 // (see StrokeStateService.h). Written at boot, after homing and by the sync task;
 // 32 bit aligned reads and writes, so no lock is needed for a single value.
 volatile float strokeUsableTravelMm = 0.0f;
+volatile float strokeHomeMarginMm = 15.0f;
+volatile float strokeFarMarginMm = 15.0f;
 
 // Measured speed, computed here from the driver position with microsecond
 // timing. A client cannot do this: the 10 Hz WebSocket stream jitters with the
@@ -197,6 +199,8 @@ static void loadSettings()
     userSpeedLimit = min(settings.user_speed_limit, settings.max_speed);
 
     strokeUsableTravelMm = settings.physical_travel - (2.0f * settings.keepout);
+    strokeHomeMarginMm = settings.home_margin;
+    strokeFarMarginMm = settings.far_margin;
 
     strokeStateService.update([&](StrokeState &state)
                               {
@@ -219,6 +223,8 @@ static void applyMotionTuning()
     strokeSettingsService.read([&settings](StrokeSettings &s)
                                { settings = s; });
 
+    strokeHomeMarginMm = settings.home_margin;
+    strokeFarMarginMm = settings.far_margin;
     Stroker.setReversalAccelerationFactor(settings.reversal_acceleration_factor);
     Stroker.setMaxAcceleration(settings.max_acceleration);
     userSpeedLimit = min(settings.user_speed_limit, settings.max_speed);
