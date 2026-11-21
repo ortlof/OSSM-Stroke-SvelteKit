@@ -78,8 +78,6 @@ fn main() -> eframe::Result<()> {
             .with_app_id("ossm-overlay-hud")
             .with_inner_size([cfg.window_width, cfg.window_height])
             .with_min_inner_size([320.0, 190.0])
-            // No OS drop shadow: a faint overlay must not cast one.
-            .with_has_shadow(false)
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(true)
@@ -95,10 +93,65 @@ fn main() -> eframe::Result<()> {
         "OSSM Stroke HUD",
         native_options,
         Box::new(move |cc| {
+            remove_drop_shadow(cc);
             Ok(Box::new(app::OverlayApp::new(cc, cfg_for_app, config_path)) as Box<dyn eframe::App>)
         }),
     )
 }
+
+/// Windows draws a system drop shadow around every window that still carries a
+/// frame style, and it draws that shadow *outside* the window rectangle. On a
+/// transparent overlay the shadow lands on the video or VR view behind the panel
+/// as a grey halo: measured against a bright backdrop, up to 64 of 255 grey
+/// levels darker, 47 pixels to each side and 78 pixels below the window.
+///
+/// `with_has_shadow(false)` cannot switch it off. In winit that option is
+/// macOS-only, and winit fakes a frameless window by painting over the
+/// non-client area in `WM_NCCALCSIZE` instead of removing `WS_CAPTION` - so DWM
+/// sees a normal framed window and keeps drawing the shadow. Turning DWM's
+/// non-client rendering off is the documented way to stop it. The setting
+/// outlives the window style writes winit makes later, which is what matters
+/// here: a click-through toggle rewrites the styles, and the shadow stayed gone
+/// across one.
+///
+/// No dependency is added for this; `dwmapi` is linked on every Windows target.
+#[cfg(windows)]
+fn remove_drop_shadow(cc: &eframe::CreationContext<'_>) {
+    use core::ffi::c_void;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: *mut c_void,
+            attribute: u32,
+            value: *const c_void,
+            size: u32,
+        ) -> i32;
+    }
+    const DWMWA_NCRENDERING_POLICY: u32 = 2;
+    const DWMNCRP_DISABLED: i32 = 1;
+
+    let raw = match cc.window_handle().map(|h| h.as_raw()) {
+        Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get() as *mut c_void,
+        _ => return,
+    };
+    // Safety: `raw` is the window this process created and still owns; the
+    // attribute value points at a local i32 that outlives the call.
+    let hr = unsafe {
+        DwmSetWindowAttribute(
+            raw,
+            DWMWA_NCRENDERING_POLICY,
+            &DWMNCRP_DISABLED as *const i32 as *const c_void,
+            core::mem::size_of::<i32>() as u32,
+        )
+    };
+    if hr != 0 {
+        eprintln!("overlay-hud: could not disable the window shadow (hr 0x{:08X})", hr);
+    }
+}
+
+#[cfg(not(windows))]
+fn remove_drop_shadow(_cc: &eframe::CreationContext<'_>) {}
 
 /// On Windows the binary stays a console application so that `--probe`,
 /// `--help` and `--toggle-click-through` keep their output when run from a

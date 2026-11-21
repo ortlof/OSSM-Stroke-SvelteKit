@@ -156,6 +156,15 @@ own console (`GetConsoleWindow` + `ShowWindow(SW_HIDE)`) whenever it runs withou
 a command-line flag. Double-click the exe and only the overlay appears; there is
 nothing to configure and no shortcut trick to remember.
 
+The Windows drop shadow is switched off in the same start-up code. Windows draws
+that shadow around any window that still carries a frame style - and winit's
+frameless windows do, because winit paints over the non-client area instead of
+removing `WS_CAPTION`. The shadow therefore lands on the game, video or VR view
+behind the panel as a soft grey halo. `with_has_shadow(false)` has **no effect on
+Windows** (winit implements it for macOS only); `DwmSetWindowAttribute(hwnd,
+DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED)` removes it for good, and it survives
+the window style writes that a click-through toggle makes.
+
 ## Cross-compile from Linux (GNU target)
 
 ```sh

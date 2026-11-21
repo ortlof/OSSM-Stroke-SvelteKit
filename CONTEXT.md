@@ -85,6 +85,11 @@ rather than re-deriving.
   per press) at the rail ends, block handles.
 - `panel_alpha = 3` (≈99 % transparent), text very dark grey, **Start/stop deliberately
   more saturated** so the one control that moves the machine stays findable.
+- **No window shadow on Windows**: `remove_drop_shadow()` in `main.rs` turns DWM's
+  non-client rendering off. winit's `has_shadow` is macOS-only and the window
+  keeps `WS_CAPTION`, so DWM drew a halo over the view behind the panel — 47 px
+  at the sides, 78 px below it, measured with a hide/show pixel diff. The
+  setting survives a click-through toggle, which rewrites the window styles.
 - `config.toml` drives window size plus a `[layout]` section (slider width/height, thumb,
   button, cap size, gap, label font) and is **re-read live** while the HUD runs.
 - Proven on Windows 11: runs, connects, live values, translucency confirmed by

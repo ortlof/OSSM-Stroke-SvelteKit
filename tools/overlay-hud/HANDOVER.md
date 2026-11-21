@@ -40,6 +40,13 @@ translucency. `Ctrl+Shift+O` toggles click-through. The Windows console is hidde
 - **Starting a GUI over SSH lands in session 0** and draws nothing. Use a scheduled
   task with `/RL HIGHEST`.
 - `unzip` is not installed on the dev box; use python `zipfile`.
+- **`with_has_shadow(false)` does nothing on Windows.** winit fakes a frameless
+  window by painting over the non-client area, so the window keeps `WS_CAPTION`
+  and DWM draws its drop shadow *outside* the window rect, over whatever is
+  behind the panel. `remove_drop_shadow()` in `main.rs` turns DWM non-client
+  rendering off and the halo is gone, including after a click-through toggle
+  (which rewrites the window styles). Measure it with a hide/show pixel diff:
+  the halo is up to 64/255 grey and 47 px at the sides, 78 px below.
 
 ## Proven
 
