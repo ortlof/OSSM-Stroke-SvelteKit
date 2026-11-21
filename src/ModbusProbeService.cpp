@@ -242,6 +242,14 @@ void ModbusProbeService::probeLoop()
             _posRefValid = false;
         }
 
+        // Alarm watch: the drive can switch itself off and the firmware would
+        // otherwise keep commanding a motor that is not listening.
+        if ((uint32_t)(millis() - _lastAlarmMs) >= 1000U)
+        {
+            _lastAlarmMs = millis();
+            pollAlarm();
+        }
+
         if (modbusParamWritePending)
         {
             modbusParamWritePending = false;
@@ -548,10 +556,47 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
 // Poll the drive's own encoder position and compare it against the firmware's
 // step count. Both are integer counts: the difference is the lost steps nothing
 // else in this project can see. All arithmetic is integer; no float formatting.
+volatile bool modbusDriveAlarm = false;
+
 volatile bool modbusProbeInvert = true;
 volatile bool modbusParamWritePending = false;
 volatile int32_t modbusParamWriteReg = 0;
 volatile int32_t modbusParamWriteValue = 0;
+
+void ModbusProbeService::pollAlarm()
+{
+    openPort();
+
+    uint8_t request[MODBUS_RTU_REQUEST_LEN];
+    uint8_t reply[16];
+    uint8_t exc = 0;
+
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
+    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, MODBUS_ALARM_REG, 1);
+    Serial2.write(request, reqLen);
+    Serial2.flush();
+    size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+    modbus_rtu::ReadReply rr = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
+    if (rr != modbus_rtu::REPLY_OK)
+    {
+        // No answer: keep the last known opinion rather than inventing "healthy".
+        return;
+    }
+
+    int word = (int)(uint16_t)(((uint16_t)reply[3] << 8) | reply[4]);
+    bool active = (word & MODBUS_ALARM_BIT) == 0;   // bit clear = AL.501 present
+    modbusDriveAlarm = active;
+
+    update([&](ModbusProbeState &s)
+           {
+        s.alarmWord = word;
+        s.alarmActive = active;
+        return StateUpdateResult::CHANGED; },
+           MODBUS_PROBE_ORIGIN);
+}
 
 void ModbusProbeService::runParamWrite(int reg, int value)
 {

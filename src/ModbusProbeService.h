@@ -73,6 +73,15 @@
 // The firmware's own step count and its steps-per-mm, scaled by 1000 so the
 // monitor can stay in integer arithmetic. Owned by main.cpp (the motion side);
 // read here as plain aligned 32-bit values, so no lock is needed.
+// Register25 (bit 13 = AL.501, position deviation too large). Found by diffing a
+// latched-alarm snapshot against a cleared one: exactly this bit changed. The bit
+// reads 0 while the alarm is ACTIVE and 1 when healthy, so it is a NOT-fault flag.
+constexpr uint16_t MODBUS_ALARM_REG = 0x0849;
+constexpr uint16_t MODBUS_ALARM_BIT = 0x2000;
+
+// Visible to the motion side: the drive has switched itself off.
+extern volatile bool modbusDriveAlarm;
+
 extern volatile bool modbusProbeInvert;   // mirror of mbInvert, for the poll task
 extern volatile bool modbusParamWritePending;
 extern volatile int32_t modbusParamWriteReg;
@@ -135,6 +144,8 @@ public:
 
     // --- position monitor result ---
     bool mbok = false;         // the last poll got a valid drive position
+    bool alarmActive = false;  // the drive reports a fault (bit 13 clear)
+    int alarmWord = 0;         // raw Register25 value
     int pwReg = -1;            // parameter register the operator asked to write
     int pwVal = 0;             // the value asked for
     int pwReadback = -1;       // what the drive actually holds afterwards
@@ -191,6 +202,8 @@ public:
         root["mb_enabled"] = state.mbEnabled;
         root["mb_poll_ms"] = state.mbPollMs;
         root["mb_ok"] = state.mbok;
+        root["drive_alarm"] = state.alarmActive;
+        root["drive_alarm_word"] = state.alarmWord;
         root["param_write_reg"] = state.pwReg;
         root["param_write_value"] = state.pwVal;
         root["param_write_readback"] = state.pwReadback;
@@ -379,6 +392,7 @@ private:
     void runTorqueWrite(int forwardRaw, int reverseRaw);
     void runPositionPoll(int positionRegister, int countsPerMm, bool invert);
     void runParamWrite(int reg, int value);
+    void pollAlarm();
     void openPort();
 
     HttpEndpoint<ModbusProbeState> _httpEndpoint;
@@ -391,6 +405,7 @@ private:
     // Position monitor reference and poll bookkeeping, owned by the task.
     bool _posRefValid = false;      // a reference has been taken this cycle
     int32_t _posRefSteps = 0;       // firmware step count at the reference
+    uint32_t _lastAlarmMs = 0;      // alarm poll cadence
     int32_t _posRefDrive = 0;       // drive register value at the reference
     int32_t _lastFwSteps = 0;       // previous poll's step count, to detect rest
     int32_t _lastDrive = 0;         // previous poll's drive value
