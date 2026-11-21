@@ -546,7 +546,7 @@ impl eframe::App for OverlayApp {
         // Scaling zooms the whole UI, which changes content_rect, which changes the
         // zoom: without a dead band that is a feedback loop and the panel jitters.
         // Only rescale when the size has genuinely changed by more than 12 percent.
-        const DESIGN_W: f32 = 380.0;
+        const DESIGN_W: f32 = 240.0;
         let cur = ctx.zoom_factor();
         let win_w = ctx.content_rect().width().max(1.0) * cur;
         let want_zoom = (win_w / DESIGN_W).clamp(0.6, 2.5);
@@ -596,7 +596,7 @@ fn v_slider(
         let (label_rect, _) = ui.allocate_exact_size(egui::vec2(width, 18.0), Sense::hover());
         let galley = ui.painter().layout_no_wrap(
             label.to_owned(),
-            FontId::proportional(14.5),
+            FontId::proportional(9.5),
             label_c(),
         );
         let pill = Rect::from_center_size(label_rect.center(), galley.size() + egui::vec2(14.0, 6.0));
@@ -606,7 +606,7 @@ fn v_slider(
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click_and_drag());
         *active = resp.dragged() || resp.is_pointer_button_down_on();
 
-        let rail_w = (rect.width() * 0.33).max(14.0);
+        let rail_w = (rect.width() * 0.55).clamp(16.0, 26.0);
         let rail = Rect::from_center_size(rect.center(), egui::vec2(rail_w, rect.height()));
         let radius = CornerRadius::same((rail_w / 2.0).round().clamp(0.0, 255.0) as u8);
 
@@ -641,9 +641,11 @@ fn v_slider(
             painter.rect_filled(filled, radius, fill_c());
         }
 
+        // The handle is exactly as wide as its rail: one continuous instrument
+        // rather than a fat block on a thin stick.
         let thumb = Rect::from_center_size(
             egui::pos2(rect.center().x, thumb_y),
-            egui::vec2(rect.width() * 0.94, THUMB_H),
+            egui::vec2(rail_w, THUMB_H),
         );
         let hot = resp.hovered() || resp.dragged();
         painter.rect_filled(thumb, CornerRadius::same(11), if hot { thumb_hot_c() } else { thumb_c() });

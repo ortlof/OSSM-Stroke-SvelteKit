@@ -46,8 +46,8 @@ impl Default for Config {
             settings_poll_secs: 2.0,
             click_through: false,
             click_through_shortcut: "Ctrl+Shift+O".to_string(),
-            window_width: 430.0,
-            window_height: 330.0,
+            window_width: 240.0,
+            window_height: 480.0,
             panel_alpha: 96,
         }
     }
