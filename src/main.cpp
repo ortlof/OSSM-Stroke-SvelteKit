@@ -69,6 +69,13 @@ float userSpeedLimit = OSSM_USER_SPEEDLIMIT_MM_S;
 
 float appliedSpeedMmPerSecond = SPEED_MIN_MM_PER_SECOND;
 
+// Which interactive setup mode the engine is in. Needed because entering fancy
+// mode from normal mode must reach the engine even though both are SETUPDEPTH.
+static int appliedSetupMode = 0;
+
+// Feed rate of the interactive setup modes, mm/s (the cable remote used 10).
+#define SETUP_SPEED_MM_PER_SECOND 10.0f
+
 // Range the engine really allows in mm, published for the state updater
 // (see StrokeStateService.h). Written at boot, after homing and by the sync task;
 // 32 bit aligned reads and writes, so no lock is needed for a single value.
@@ -240,6 +247,39 @@ static void applyStrokeStateToEngine(const String &originId)
     // runs under the state mutex, so this applies exactly what the browser sees.
     ServoState engineState = Stroker.getState();
 
+    // --- interactive depth setup ---------------------------------------------
+    // 0 off, 1 setup depth, 2 setup depth with the sensation slider (fancy).
+    // While the engine is in SETUPDEPTH every setDepth() and setSensation() moves
+    // the machine at the setup feed rate, so the browser sliders drive it live.
+    if (command.setup != appliedSetupMode)
+    {
+        if (command.setup == 0)
+        {
+            if (engineState == SETUPDEPTH)
+            {
+                Stroker.stopMotion();  // leaves the mode, state READY
+            }
+            appliedSetupMode = 0;
+        }
+        else
+        {
+            if (!Stroker.setupDepth(SETUP_SPEED_MM_PER_SECOND, command.setup == 2))
+            {
+                // Not homed, the engine refuses. Tell the user instead of doing nothing.
+                esp32sveltekit.getNotificationService()->pushNotification("Machine is not homed", PUSHWARNING);
+                strokeStateService.update([](StrokeState &state)
+                                          {
+                    state.setup = 0;
+                    return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
+                appliedSetupMode = 0;
+            }
+            else
+            {
+                appliedSetupMode = command.setup;
+            }
+        }
+    }
+
     if (command.home)
     {
         // Clear the transient command first, then run the homing procedure.
@@ -385,6 +425,15 @@ void syncStrokeStateTask(void *pvParameters)
                                   {
             bool changed = false;
             if (state.servoState != stateName) { state.servoState = stateName; changed = true; }
+
+            // The engine can leave SETUPDEPTH on its own, for example when a
+            // pattern starts. Keep the mode field honest.
+            if (state.setup != 0 && engineState != SETUPDEPTH)
+            {
+                state.setup = 0;
+                appliedSetupMode = 0;
+                changed = true;
+            }
             if (state.run != running) { state.run = running; changed = true; }
             if (state.homed != homed) { state.homed = homed; changed = true; }
             if (state.clipping != clipping) { state.clipping = clipping; changed = true; }

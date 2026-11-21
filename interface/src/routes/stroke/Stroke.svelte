@@ -14,6 +14,7 @@
 	interface StrokeState {
 		run: boolean;
 		keep_stroke_start: boolean;
+		setup: number;
 		speed: number;
 		depth: number;
 		stroke: number;
@@ -38,6 +39,7 @@
 	let state: StrokeState = $state({
 		run: false,
 		keep_stroke_start: false,
+		setup: 0,
 		speed: 20,
 		depth: 0,
 		stroke: 0,
@@ -157,6 +159,20 @@
 			>
 				<Stop class="mr-2 h-5 w-5" /><span>Stop</span>
 			</button>
+			<button
+				class="btn inline-flex items-center"
+				class:btn-active={state.setup === 1}
+				onclick={() => command({ setup: state.setup === 1 ? 0 : 1 })}
+			>
+				Setup depth
+			</button>
+			<button
+				class="btn inline-flex items-center"
+				class:btn-active={state.setup === 2}
+				onclick={() => command({ setup: state.setup === 2 ? 0 : 2 })}
+			>
+				Setup depth fancy
+			</button>
 			<button class="btn inline-flex items-center" onclick={() => command({ home: true })}>
 				<Home class="mr-2 h-5 w-5" /><span>Home</span>
 			</button>
@@ -164,6 +180,16 @@
 				<Reload class="mr-2 h-5 w-5" /><span>Reload</span>
 			</button>
 		</div>
+
+		{#if state.setup !== 0}
+			<div class="alert alert-warning my-2 shadow-lg">
+				<span>
+					Setup mode {state.setup === 2 ? 'fancy: move the Sensation slider to walk between depth minus
+					stroke and depth' : 'depth: move the Depth slider to drive the machine'} at 10 mm/s. Press the
+					button again, or press Start, to leave the mode.
+				</span>
+			</div>
+		{/if}
 
 		<div class="divider">Motion</div>
 

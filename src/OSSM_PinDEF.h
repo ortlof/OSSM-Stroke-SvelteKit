@@ -1,5 +1,5 @@
 /*
-    Pin Definitions - Drivers, Buttons and Remotes
+    Pin Definitions - Drivers, homing and safety
     OSSM Reference board users are unlikely to need to modify this! See OSSM_Config.h
 */
 
@@ -20,16 +20,10 @@
 /*
     Homing and safety pins
 */
-#define SERVO_ENDSTOP     12        // Homing Pin one Homing Switch IO pin to Ground 
-
-/*These are configured for the OSSM Remote - which has a screen, a potentiometer and an encoder which clicks*/
-#define SPEED_POT_PIN 34                // Speed Poti Pin
-#define ENC_SW 35                       // Ecoder Button Switch  
-#define ENC_CLK 18                      // Encoder A
-#define ENC_DT 5                        // Encoder B
-#define ENC_TOL 2                       // 2 Clicks of Tolerance
-#define V_LONG_PRESS_MS 300             // Encoder Switch Long Press Activation Time in ms
-#define LONG_PRESS_MS 50                // Encoder Switch Short Press Activation Time in ms
-#define REMOTE_SDA 21
-#define REMOTE_CLK 19
-#define REMOTE_ADDRESS 0x3C             // I2C Address - use 0x3C or 0x3D depending on your display
+#define SERVO_ENDSTOP     12        // Homing Pin one Homing Switch IO pin to Ground
+/*
+    The cable remote of the original firmware is gone on purpose: no rotary
+    encoder, no speed potentiometer, no OLED. All of it is in the browser now.
+    The old pins were SPEED_POT_PIN 34, ENC_SW 35, ENC_CLK 18, ENC_DT 5,
+    REMOTE_SDA 21, REMOTE_CLK 19. Do not reuse 34 and 35: they are input only.
+*/

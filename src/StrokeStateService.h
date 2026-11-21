@@ -38,6 +38,7 @@ public:
     bool run = false;        // true: run the pattern, false: stop the motion
     bool home = false;       // transient: re-run the homing procedure, cleared by the firmware
     bool keepStrokeStart = false;  // when the depth changes, hold the near endpoint and grow the stroke
+    int setup = 0;           // interactive depth setup: 0 off, 1 depth, 2 depth with sensation (fancy)
     float speed = 10.0f;     // commanded linear actuator speed in mm/s
     float depth = 0.0f;      // stroke depth in mm
     float stroke = 0.0f;     // stroke length in mm
@@ -63,6 +64,7 @@ public:
         root["run"] = state.run;
         root["home"] = state.home;
         root["keep_stroke_start"] = state.keepStrokeStart;
+        root["setup"] = state.setup;
         root["speed"] = state.speed;
         root["depth"] = state.depth;
         root["stroke"] = state.stroke;
@@ -95,6 +97,7 @@ public:
         bool run = root["run"] | state.run;
         bool home = root["home"] | state.home;
         bool keepStrokeStart = root["keep_stroke_start"] | state.keepStrokeStart;
+        int setup = root["setup"] | state.setup;
         float speed = root["speed"] | state.speed;
         float depth = depthSent ? depthIn : state.depth;
         float stroke = strokeSent ? strokeIn : state.stroke;
@@ -125,6 +128,7 @@ public:
         stroke = constrain(stroke, 0.0f, depth);
 
         if (run == state.run && home == state.home && keepStrokeStart == state.keepStrokeStart &&
+            setup == state.setup &&
             speed == state.speed && depth == state.depth &&
             stroke == state.stroke && sensation == state.sensation && pattern == state.pattern)
         {
@@ -134,6 +138,7 @@ public:
         state.run = run;
         state.home = home;
         state.keepStrokeStart = keepStrokeStart;
+        state.setup = setup;
         state.speed = speed;
         state.depth = depth;
         state.stroke = stroke;
