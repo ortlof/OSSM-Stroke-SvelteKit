@@ -79,9 +79,6 @@
 constexpr uint16_t MODBUS_ALARM_REG = 0x0849;
 constexpr uint16_t MODBUS_ALARM_BIT = 0x2000;
 
-// Visible to the motion side: the drive has switched itself off.
-extern volatile bool modbusDriveAlarm;
-
 extern volatile bool modbusProbeInvert;   // mirror of mbInvert, for the poll task
 extern volatile bool modbusParamWritePending;
 extern volatile int32_t modbusParamWriteReg;
@@ -144,7 +141,7 @@ public:
 
     // --- position monitor result ---
     bool mbok = false;         // the last poll got a valid drive position
-    bool alarmActive = false;  // the drive reports a fault (bit 13 clear)
+    bool alarmKnown = false;   // false: the fault bit is NOT identified yet
     int alarmWord = 0;         // raw Register25 value
     int pwReg = -1;            // parameter register the operator asked to write
     int pwVal = 0;             // the value asked for
@@ -202,7 +199,9 @@ public:
         root["mb_enabled"] = state.mbEnabled;
         root["mb_poll_ms"] = state.mbPollMs;
         root["mb_ok"] = state.mbok;
-        root["drive_alarm"] = state.alarmActive;
+        // drive_alarm is deliberately absent: the fault bit in Register25 is not
+        // identified. A boolean here would be a guess wearing a warning label.
+        root["drive_alarm_known"] = state.alarmKnown;
         root["drive_alarm_word"] = state.alarmWord;
         root["param_write_reg"] = state.pwReg;
         root["param_write_value"] = state.pwVal;

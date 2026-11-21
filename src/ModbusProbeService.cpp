@@ -556,8 +556,6 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
 // Poll the drive's own encoder position and compare it against the firmware's
 // step count. Both are integer counts: the difference is the lost steps nothing
 // else in this project can see. All arithmetic is integer; no float formatting.
-volatile bool modbusDriveAlarm = false;
-
 volatile bool modbusProbeInvert = true;
 volatile bool modbusParamWritePending = false;
 volatile int32_t modbusParamWriteReg = 0;
@@ -587,13 +585,15 @@ void ModbusProbeService::pollAlarm()
     }
 
     int word = (int)(uint16_t)(((uint16_t)reply[3] << 8) | reply[4]);
-    bool active = (word & MODBUS_ALARM_BIT) == 0;   // bit clear = AL.501 present
-    modbusDriveAlarm = active;
 
+    // NO interpretation yet. Bit 13 of 0x0849 read 0 while AL.501 was latched, 1
+    // right after a power cycle, and 0 again while perfectly healthy - so it is not
+    // a fault flag. The raw word is published; nothing is derived from it until it
+    // has been captured in four controlled states.
     update([&](ModbusProbeState &s)
            {
         s.alarmWord = word;
-        s.alarmActive = active;
+        s.alarmKnown = false;
         return StateUpdateResult::CHANGED; },
            MODBUS_PROBE_ORIGIN);
 }
