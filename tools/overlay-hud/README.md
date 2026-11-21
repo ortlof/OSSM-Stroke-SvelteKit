@@ -165,6 +165,22 @@ Windows** (winit implements it for macOS only); `DwmSetWindowAttribute(hwnd,
 DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED)` removes it for good, and it survives
 the window style writes that a click-through toggle makes.
 
+The overlay also never takes the foreground, on purpose. Windows answers a
+foreground change by bringing the taskbar forward, straight through a fullscreen
+video, so the window carries `WS_EX_NOACTIVATE`: a click delivers the mouse
+messages to the controls without activating the window, and it is shown with
+`SW_SHOWNOACTIVATE` so starting it over a running video does not disturb the view
+either. Because the operating system's move loop refuses to run for such a window,
+the thin grip at the top drags the window itself (the mouse is captured and the
+window follows the pointer); X11 and Wayland still use the window system's own
+drag.
+
+One trade-off comes with that: a window which never activates never receives
+keyboard focus, so `Ctrl+Shift+O` cannot fire while the overlay sits over another
+application. Use `overlay-hud --toggle-click-through` from a second process (a
+Stream Deck, AutoHotkey, a shell one-liner) or edit `click_through` in
+`config.toml`; the running overlay picks the file up within a second.
+
 ## Cross-compile from Linux (GNU target)
 
 ```sh

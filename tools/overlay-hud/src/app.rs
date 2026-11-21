@@ -132,10 +132,21 @@ pub struct OverlayApp {
     config: Config,
     config_path: PathBuf,
     last_config_check: Instant,
+    /// The Win32 window handle (0 elsewhere), so the no-activate style can be put
+    /// back after winit rewrites the window styles.
+    hwnd: isize,
+    /// While the grip is being dragged on Windows: the offset from the pointer to
+    /// the window's top-left corner. `None` when no drag of ours is running.
+    grip_grab: Option<(i32, i32)>,
 }
 
 impl OverlayApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, config: Config, config_path: PathBuf) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        config: Config,
+        config_path: PathBuf,
+        hwnd: isize,
+    ) -> Self {
         let ctx = cc.egui_ctx.clone();
         ctx.set_visuals(egui::Visuals::dark());
         ctx.all_styles_mut(|style| {
@@ -167,6 +178,8 @@ impl OverlayApp {
             config,
             config_path,
             last_config_check: Instant::now(),
+            hwnd,
+            grip_grab: None,
         }
     }
 
@@ -270,6 +283,10 @@ impl OverlayApp {
     }
 
     /// A thin grip across the top: the only place that moves the window.
+    ///
+    /// On Windows the overlay drags itself (`begin_grip_drag`); everywhere else
+    /// the window system does it. See `begin_grip_drag` for why the split exists:
+    /// the OS move loop does nothing for a window that must never be activated.
     fn grip(&mut self, ui: &mut egui::Ui) {
         let w = ui.available_width();
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 22.0), Sense::drag());
@@ -277,7 +294,18 @@ impl OverlayApp {
         let pill = Rect::from_center_size(rect.center(), egui::vec2(64.0, 5.0));
         painter.rect_filled(pill, CornerRadius::same(2), grip_c());
         if resp.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            self.grip_grab = crate::begin_grip_drag(self.hwnd);
+            if self.grip_grab.is_none() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+        }
+        if resp.dragged() {
+            if let Some(grab) = self.grip_grab {
+                crate::follow_grip_drag(self.hwnd, grab);
+            }
+        }
+        if resp.drag_stopped() && self.grip_grab.take().is_some() {
+            crate::end_grip_drag(self.hwnd);
         }
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -641,6 +669,12 @@ impl eframe::App for OverlayApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // winit rebuilds the window styles whenever one of its own flags changes
+        // (a click-through toggle does) and its style set knows nothing about the
+        // no-activate bit, so it is put back here. Cheap: one GetWindowLongW.
+        if crate::keep_unactivated(self.hwnd) {
+            eprintln!("overlay-hud: no-activate style restored after a style rewrite");
+        }
         self.drain_snapshots();
         self.refresh_from_device(&ctx);
         self.poll_config_file(&ctx);

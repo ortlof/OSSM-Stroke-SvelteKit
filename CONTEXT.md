@@ -90,6 +90,16 @@ rather than re-deriving.
   keeps `WS_CAPTION`, so DWM drew a halo over the view behind the panel — 47 px
   at the sides, 78 px below it, measured with a hide/show pixel diff. The
   setting survives a click-through toggle, which rewrites the window styles.
+- **It never takes the foreground**, and that is what keeps the taskbar out of a
+  fullscreen video: `WS_EX_NOACTIVATE` (re-applied every frame, because winit
+  rebuilds the style set) plus `with_active(false)`. A click that activates the
+  overlay is what makes the shell bring the taskbar forward; measured, the
+  foreground stays put with the style and jumps to the overlay without it. The
+  cost: no keyboard focus, so the click-through shortcut cannot fire — use
+  `overlay-hud --toggle-click-through` or edit `config.toml`.
+- **A no-activate window cannot use the OS move loop.** winit's `StartDrag` moved
+  it 0 px while a build without the style moved it 36x24 on the same drag, so the
+  grip drags the window itself (`SetCapture` + `SetWindowPos`).
 - `config.toml` drives window size plus a `[layout]` section (slider width/height, thumb,
   button, cap size, gap, label font) and is **re-read live** while the HUD runs.
 - Proven on Windows 11: runs, connects, live values, translucency confirmed by

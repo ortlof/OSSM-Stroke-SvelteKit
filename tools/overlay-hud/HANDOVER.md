@@ -47,6 +47,19 @@ translucency. `Ctrl+Shift+O` toggles click-through. The Windows console is hidde
   rendering off and the halo is gone, including after a click-through toggle
   (which rewrites the window styles). Measure it with a hide/show pixel diff:
   the halo is up to 64/255 grey and 47 px at the sides, 78 px below.
+- **A window that must never activate cannot use the OS move loop.** Clicking an
+  overlay that *does* activate hands it the foreground, and the shell answers a
+  foreground change by bringing the taskbar forward - straight through the
+  fullscreen video. `WS_EX_NOACTIVATE` stops that, and then winit's `StartDrag`
+  does nothing at all: the grip drag was delivered to the app (44 drag frames
+  logged) and moved the window 0 pixels, while the same simulated drag on a build
+  without the style moved it 36x24. The overlay now drags itself
+  (`SetCapture` + `SetWindowPos`, the window follows the pointer). Two
+  consequences: the app re-applies the style every frame, because winit rebuilds
+  the whole style set from its own flags on every change; and the window can
+  never hold keyboard focus, so the `Ctrl+Shift+O` click-through shortcut is dead
+  while it is over another application - the second-process
+  `--toggle-click-through` is the working path.
 
 ## Proven
 
@@ -72,5 +85,10 @@ believed it while the drive was switched off.
 
 ## Not verified on Windows yet
 
-Click-through, always-on-top behaviour over a full-screen application, and the
-crosshair button's real-world usability in a headset.
+- Click-through **toggling** is verified at the flag level (`WS_EX_LAYERED |
+  WS_EX_TRANSPARENT` appear, and the drop-shadow and no-activate settings survive the
+  style rewrite). Passthrough over a real application, and always-on-top over a real
+  fullscreen application, are not: the test VM's desktop has no fullscreen video, so
+  only the *trigger* was measured (the foreground no longer changes on a click, with
+  the style present and provably without it).
+- The crosshair button's real-world usability in a headset.
