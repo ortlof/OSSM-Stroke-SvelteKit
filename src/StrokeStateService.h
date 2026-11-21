@@ -50,9 +50,12 @@ public:
     bool homed = false;
     float position = 0.0f;         // current position in mm
     float physicalTravel = 0.0f;   // measured travel in mm between the hard stops
-    float usableTravel = 0.0f;     // physicalTravel minus both keepout zones, the real range
-    float sweepStart = 0.0f;       // near endpoint of the sweep in mm, = depth - stroke
     bool clipping = false;         // engine had to clip a commanded motion
+
+
+    // usable_travel and sweep_start are derived, so they are not stored: a stored
+    // copy would lag one synchronisation tick behind depth and stroke, and the
+    // browser would briefly show a sweep the machine is not doing.
 
     static void read(StrokeState &state, JsonObject &root)
     {
@@ -70,8 +73,10 @@ public:
         root["homed"] = state.homed;
         root["position"] = state.position;
         root["physical_travel"] = state.physicalTravel;
-        root["usable_travel"] = state.usableTravel;
-        root["sweep_start"] = state.sweepStart;
+        root["usable_travel"] = strokeUsableTravelMm;
+
+        const float sweep = state.depth - state.stroke;
+        root["sweep_start"] = (sweep > 0.0f) ? sweep : 0.0f;
         root["clipping"] = state.clipping;
     }
 

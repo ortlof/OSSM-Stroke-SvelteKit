@@ -185,7 +185,6 @@ static void loadSettings()
     strokeStateService.update([&](StrokeState &state)
                               {
         state.physicalTravel = settings.physical_travel;
-        state.usableTravel = strokeUsableTravelMm;
         state.speed = clampSpeedMmPerSecond(state.speed);
         return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
 
@@ -320,8 +319,8 @@ void syncStrokeStateTask(void *pvParameters)
             }
 
             // The engine confines depth and stroke to the travel minus both
-            // keepout zones. Offer the same range to the browser, otherwise the
-            // engine silently clamps what the sliders send.
+            // keepout zones. usable_travel is served from this value, see
+            // StrokeStateService.h.
             float usable = strokingMachine.physicalTravel - (2.0f * strokingMachine.keepoutBoundary);
             strokeUsableTravelMm = (usable > 0.0f) ? usable : 0.0f;
 
@@ -329,7 +328,6 @@ void syncStrokeStateTask(void *pvParameters)
                                       {
                 state.homed = success;
                 state.physicalTravel = strokingMachine.physicalTravel;
-                state.usableTravel = usable;
                 return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
 
             esp32sveltekit.getNotificationService()->pushNotification(
@@ -353,7 +351,6 @@ void syncStrokeStateTask(void *pvParameters)
         float travel = strokingMachine.physicalTravel;
         float usable = travel - (2.0f * strokingMachine.keepoutBoundary);
         strokeUsableTravelMm = (usable > 0.0f) ? usable : 0.0f;
-        float sweepStart = 0.0f;
 
         strokeStateService.update([&](StrokeState &state)
                                   {
@@ -364,11 +361,6 @@ void syncStrokeStateTask(void *pvParameters)
             if (state.clipping != clipping) { state.clipping = clipping; changed = true; }
             if (fabsf(state.position - positionMm) >= 0.05f) { state.position = positionMm; changed = true; }
             if (fabsf(state.physicalTravel - travel) >= 0.05f) { state.physicalTravel = travel; changed = true; }
-            if (fabsf(state.usableTravel - usable) >= 0.05f) { state.usableTravel = usable; changed = true; }
-
-            // near endpoint of the sweep, never below the home position
-            sweepStart = (state.depth - state.stroke > 0.0f) ? (state.depth - state.stroke) : 0.0f;
-            if (fabsf(state.sweepStart - sweepStart) >= 0.05f) { state.sweepStart = sweepStart; changed = true; }
 
             String name = Stroker.getPatternName(state.pattern);
             if (state.patternName != name) { state.patternName = name; changed = true; }

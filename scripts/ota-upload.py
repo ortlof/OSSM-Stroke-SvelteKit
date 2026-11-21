@@ -72,7 +72,9 @@ def watch_progress(device, token, stop):
     try:
         if ws_connect is None:
             return
-        with ws_connect("ws://%s/ws/events?access_token=%s" % (device, token)) as ws:
+        # no keepalive pings: the device reboots when the write completes and the
+        # library would print a timeout traceback from its own thread
+        with ws_connect("ws://%s/ws/events?access_token=%s" % (device, token), ping_interval=None) as ws:
             ws.send(msgpack.packb({"event": "subscribe", "data": "otastatus"}))
             last = -1
             while not stop.is_set():
