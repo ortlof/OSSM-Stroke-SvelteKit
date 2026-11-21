@@ -447,6 +447,44 @@ impl OverlayApp {
     /// *does* move the machine; the tooltip says so. It lights up amber while
     /// `state.setup != 0`, and it is a glyph rather than a word so it stays
     /// small and can never be read as Start/Stop.
+    /// Pattern selection without a combo box: a small square that opens a menu.
+    fn pattern_button(&mut self, ui: &mut egui::Ui) {
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(SETUP_SIZE, SETUP_SIZE), Sense::click());
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(8), combo_fill());
+        if resp.hovered() {
+            painter.rect_filled(rect, CornerRadius::same(8), combo_hot());
+        }
+        let ink = Color32::from_rgb(226, 230, 244);
+        let c = rect.center();
+        let t = SETUP_SIZE * 0.28;
+        for i in -1..=1 {
+            let y = c.y + i as f32 * t * 0.62;
+            painter.line_segment(
+                [egui::pos2(c.x - t, y), egui::pos2(c.x + t, y)],
+                egui::Stroke::new(2.0, ink),
+            );
+        }
+        let current = self.pattern;
+        let mut chosen = current;
+        egui::Popup::menu(&resp).show(|ui| {
+            ui.style_mut().text_styles.insert(
+                egui::TextStyle::Button,
+                FontId::proportional(12.0),
+            );
+            for (i, name) in crate::api::FALLBACK_PATTERNS.iter().enumerate() {
+                if ui.selectable_label(chosen == i as i32, *name).clicked() {
+                    chosen = i as i32;
+                }
+            }
+        });
+        if chosen != current {
+            self.pattern = chosen;
+            self.send_state(serde_json::json!({ "pattern": chosen }));
+        }
+        resp.on_hover_text("pattern");
+    }
+
     fn keep_start_button(&mut self, ui: &mut egui::Ui) {
         use std::sync::atomic::{AtomicBool, Ordering};
         static ON: AtomicBool = AtomicBool::new(false);
@@ -564,11 +602,15 @@ impl eframe::App for OverlayApp {
         egui::CentralPanel::default().frame(panel).show(ui, |ui| {
             self.grip(ui);
             ui.add_space(4.0);
-            self.big_button(ui);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                self.big_button(ui);
+                self.pattern_button(ui);
+                self.setup_button(ui);
+                self.keep_start_button(ui);
+            });
             ui.add_space(8.0);
             self.sliders_row(ui);
-            ui.add_space(8.0);
-            self.controls_row(ui);
         });
 
         // Keep the status dot and the values alive while the pointer is idle.
@@ -594,21 +636,40 @@ fn v_slider(
 ) -> bool {
     let mut sent = false;
     ui.vertical(|ui| {
-        let (label_rect, _) = ui.allocate_exact_size(egui::vec2(width, 18.0), Sense::hover());
-        let galley = ui.painter().layout_no_wrap(
-            label.to_owned(),
-            FontId::proportional(9.5),
+        // The value sits above the rail, where it can be read without covering
+        // anything, instead of inside the handle.
+        let (val_rect, _) = ui.allocate_exact_size(egui::vec2(width, 17.0), Sense::hover());
+        let vgalley = ui.painter().layout_no_wrap(
+            format!("{:.0}", *value),
+            FontId::proportional(12.5),
             label_c(),
         );
-        let pill = Rect::from_center_size(label_rect.center(), galley.size() + egui::vec2(14.0, 6.0));
-        ui.painter().rect_filled(pill, CornerRadius::same(7), Color32::from_rgba_unmultiplied(8, 10, 14, 150));
-        ui.painter().galley(label_rect.center() - galley.size() / 2.0, galley, label_c());
+        ui.painter()
+            .galley(val_rect.center() - vgalley.size() / 2.0, vgalley, label_c());
 
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click_and_drag());
         *active = resp.dragged() || resp.is_pointer_button_down_on();
 
-        let rail_w = (rect.width() * 0.55).clamp(16.0, 26.0);
-        let rail = Rect::from_center_size(rect.center(), egui::vec2(rail_w, rect.height()));
+        // Room on the left for a vertical label; the rail shifts right of it.
+        const LABEL_COL: f32 = 13.0;
+        let rail_w = ((rect.width() - LABEL_COL) * 0.62).clamp(16.0, 26.0);
+        let rail = Rect::from_center_size(
+            egui::pos2(rect.center().x + LABEL_COL * 0.5, rect.center().y),
+            egui::vec2(rail_w, rect.height()),
+        );
+        let lgalley = ui.painter().layout_no_wrap(
+            label.to_owned(),
+            FontId::proportional(10.0),
+            label_c(),
+        );
+        let lpos = egui::pos2(
+            rect.left() + LABEL_COL * 0.5 + 4.0,
+            rect.center().y + lgalley.size().x * 0.5,
+        );
+        ui.painter().add(
+            egui::epaint::TextShape::new(lpos, lgalley, label_c())
+                .with_angle(-std::f32::consts::FRAC_PI_2),
+        );
         let radius = CornerRadius::same((rail_w / 2.0).round().clamp(0.0, 255.0) as u8);
 
         // The thumb travels between the rail ends, so map the pointer over that
@@ -656,13 +717,14 @@ fn v_slider(
             egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(10, 12, 18, 90)),
             egui::StrokeKind::Inside,
         );
-        painter.text(
-            thumb.center(),
-            Align2::CENTER_CENTER,
-            format!("{:.0}", *value),
-            FontId::proportional(17.0),
-            thumb_text(),
-        );
+        // The handle is a grip, nothing more: the number lives above the rail.
+        if hot {
+            painter.line_segment(
+                [egui::pos2(thumb.center().x - 5.0, thumb.center().y),
+                 egui::pos2(thumb.center().x + 5.0, thumb.center().y)],
+                egui::Stroke::new(1.5, Color32::from_rgba_unmultiplied(10, 12, 18, 90)),
+            );
+        }
 
         if hot {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
