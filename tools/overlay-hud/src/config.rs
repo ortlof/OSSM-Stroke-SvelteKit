@@ -29,6 +29,11 @@ pub struct Config {
     /// Initial window size in logical points.
     pub window_width: f32,
     pub window_height: f32,
+
+    /// How opaque the panel is: 0 is invisible, 255 is solid. Around 96 keeps a
+    /// video or VR window readable behind the controls while the text stays
+    /// legible.
+    pub panel_alpha: u8,
 }
 
 impl Default for Config {
@@ -41,8 +46,9 @@ impl Default for Config {
             settings_poll_secs: 2.0,
             click_through: false,
             click_through_shortcut: "Ctrl+Shift+O".to_string(),
-            window_width: 420.0,
-            window_height: 260.0,
+            window_width: 340.0,
+            window_height: 320.0,
+            panel_alpha: 96,
         }
     }
 }

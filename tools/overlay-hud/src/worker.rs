@@ -19,6 +19,10 @@ pub enum Command {
     /// Subset to POST to `/rest/strokeState`.
     Patch(serde_json::Value),
     /// Subset to POST to `/rest/strokeSettings`.
+    /// Part of the worker's protocol; the overlay's tuning controls were
+    /// removed in favour of the browser page, which is the better place for
+    /// them.
+    #[allow(dead_code)]
     SettingsPatch(serde_json::Value),
 }
 
@@ -28,6 +32,7 @@ pub struct Snapshot {
     pub state: StrokeState,
     pub settings: StrokeSettings,
     pub connected: bool,
+    #[allow(dead_code)]
     pub error: Option<String>,
 }
 

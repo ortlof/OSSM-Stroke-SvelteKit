@@ -14,15 +14,22 @@ cross build link with no mingw toolchain at all.
 
 ## What it shows
 
-* **Controls** — Start / Stop, Home, Speed (capped at the slider limit from
-  `/rest/strokeSettings`), Depth, Stroke, Pattern selector, Sensation (−100..100),
-  Keep-stroke-start, and a *Tuning and limits* section (speed limit, home margin,
-  reversal acceleration factor) that is collapsed by default.
-* **Indicators** — connection (online/offline) and homing (`servo_state` plus
-  `homed`), in the title strip.
-* **Readout** — position, `speed_measured` of the requested speed, `servo_state`,
-  the pattern name, a **CLIPPING** warning, and the sweep range
-  (`sweep_start` → `depth` of the usable travel).
+* **Three vertical sliders** — Speed (capped at the slider limit from
+  `/rest/strokeSettings`), Depth, Stroke — and **one Start/Stop button**. That is
+  the whole control surface, on purpose: the overlay is aimed at a pointer that is
+  far from the screen (a VR controller, a laser pointer, a hand on a touch panel),
+  so every target is large and nothing else competes for attention.
+* **The value lives in the handle.** The number is printed inside the slider
+  handle, which removes the readout row the earlier design had.
+* **One status dot** inside the button: red = offline, yellow = connected but not
+  homed, green = ready or running. No status text.
+* **Vertical on purpose.** A vertical slider can be made tall and fat without
+  widening the window, and a hand that is not resting on anything moves up and
+  down more predictably than sideways.
+
+Everything from the earlier design that is not needed at arm's length — pattern
+selector, sensation, keep-stroke-start, the tuning section, the readout row — now
+lives only in the browser page, which is the better place for it.
 
 Every command is a `POST /rest/strokeState` with a subset body. The firmware
 clamps what it receives (speed to the slider limit, depth to usable travel minus
@@ -64,9 +71,19 @@ poll_hz = 8.0
 settings_poll_secs = 2.0
 click_through = false
 click_through_shortcut = "Ctrl+Shift+O"
-window_width = 420.0
-window_height = 260.0
+window_width = 340.0
+window_height = 320.0
+
+# How opaque the panel is: 0 is invisible, 255 is solid.
+# Lower it for VR, raise it if the text fights a bright video behind it.
+panel_alpha = 96
 ```
+
+**Transparency.** `panel_alpha` is the knob. The panel is drawn translucent over a
+fully transparent window, so whatever is behind it — a video, a VR mirror, the
+desktop — stays visible. The slider labels sit on small dark pills and the slider
+tracks are dark with a bright fill, so the controls stay readable whatever is
+behind them.
 
 **Setting the device address.** Edit `device` in `config.toml`. The file is
 looked up in this order:

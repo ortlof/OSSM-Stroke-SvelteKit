@@ -1,59 +1,97 @@
 //! The egui overlay window.
 //!
-//! Frameless, transparent, always-on-top. The panel is a dark translucent
-//! rounded rectangle drawn by egui itself; the window behind it is transparent,
-//! so the rounded corners and the area outside the panel let the desktop show
-//! through. Dragging the top strip moves the window.
+//! Frameless, transparent, always-on-top. The panel is a translucent rounded
+//! rectangle drawn by egui; the window itself is transparent, so everything
+//! outside the panel lets the desktop through.
 //!
-//! Click-through (mouse passthrough) is toggled by the keyboard shortcut named
-//! in the config (default `Ctrl+Shift+O`) and, for when the overlay cannot get
-//! focus, by a second process running `overlay-hud --toggle-click-through`, which
-//! flips the flag in the config file; this app re-reads the file about once a
-//! second and applies the change.
+//! The layout is deliberately sparse, because it is aimed at a pointer far from
+//! the screen (a VR controller, a laser pointer, a hand on a touch panel):
+//!
+//!   - one full-width Start/Stop button, 54 px tall
+//!   - three tall vertical sliders, each about a third of the width
+//!   - the value is printed inside the slider thumb, so no readout row is needed
+//!   - one small status dot, no status text
+//!
+//! Vertical rather than horizontal because a vertical target can be made tall and
+//! fat without widening the window, and because a hand that is not resting on
+//! anything moves up and down more predictably than sideways.
+//!
+//! Click-through (mouse passthrough) is toggled by the keyboard shortcut in the
+//! config (default `Ctrl+Shift+O`) and, for when the overlay cannot take focus,
+//! by a second process running `overlay-hud --toggle-click-through`, which flips
+//! the flag in the config file; this app re-reads that file about once a second.
 
-use crate::api::FALLBACK_PATTERNS;
 use crate::config::Config;
 use crate::worker::{Command, Snapshot, Worker};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Align2, Color32, CornerRadius, FontId, Rect, Sense};
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
+
+// Translucent throughout: the panel is roughly 43 % opaque, so the video or VR
+// window behind it stays readable while the controls stay legible.
+fn panel_alpha_of(alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(12, 12, 16, alpha)
+}
+fn border() -> Color32 {
+    Color32::from_rgba_unmultiplied(160, 165, 190, 70)
+}
+fn rail_c() -> Color32 {
+    Color32::from_rgba_unmultiplied(0, 0, 0, 80)
+}
+fn fill_c() -> Color32 {
+    Color32::from_rgba_unmultiplied(96, 186, 255, 205)
+}
+fn thumb_c() -> Color32 {
+    Color32::from_rgba_unmultiplied(238, 242, 255, 210)
+}
+fn thumb_hot_c() -> Color32 {
+    Color32::from_rgba_unmultiplied(255, 255, 255, 245)
+}
+fn thumb_text() -> Color32 {
+    Color32::from_rgba_unmultiplied(12, 14, 20, 255)
+}
+fn label_c() -> Color32 {
+    Color32::from_rgba_unmultiplied(226, 230, 244, 215)
+}
+fn grip_c() -> Color32 {
+    Color32::from_rgba_unmultiplied(200, 205, 225, 90)
+}
+fn start_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(42, 140, 92, 170)
+}
+fn stop_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(172, 55, 55, 170)
+}
+fn disabled_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(72, 74, 86, 110)
+}
 
 const OK: Color32 = Color32::from_rgb(120, 220, 140);
 const WARN: Color32 = Color32::from_rgb(240, 200, 90);
 const ERR: Color32 = Color32::from_rgb(240, 110, 110);
-const DIM: Color32 = Color32::from_rgb(165, 170, 185);
+
+const BUTTON_H: f32 = 54.0;
+const THUMB_H: f32 = 34.0;
+const GAP: f32 = 10.0;
 
 pub struct OverlayApp {
     worker: Worker,
     snapshot: Snapshot,
 
-    // Editable values. These mirror the device except while the user is
-    // touching the widget or a command is in flight; see `refresh_from_device`.
+    // Editable values. These mirror the device except while the user is touching
+    // the widget or a command is in flight; see `refresh_from_device`.
     speed: f32,
     speed_active: bool,
     depth: f32,
     depth_active: bool,
     stroke: f32,
     stroke_active: bool,
-    sensation: f32,
-    sensation_active: bool,
-    keep_start: bool,
-    pattern: i32,
-    user_speed_limit: f32,
-    limit_active: bool,
-    home_margin: f32,
-    margin_active: bool,
-    reversal: f32,
-    reversal_active: bool,
 
-    patterns: Vec<String>,
     seeded: bool,
     last_send: Instant,
 
     click_through: bool,
     shortcut: (egui::Modifiers, egui::Key),
-    shortcut_label: String,
     config: Config,
     config_path: PathBuf,
     last_config_check: Instant,
@@ -64,10 +102,8 @@ impl OverlayApp {
         let ctx = cc.egui_ctx.clone();
         ctx.set_visuals(egui::Visuals::dark());
         ctx.all_styles_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(6.0, 4.0);
-            style.spacing.slider_width = 104.0;
-            style.spacing.interact_size.y = 16.0;
-            style.spacing.button_padding = egui::vec2(6.0, 3.0);
+            style.spacing.item_spacing = egui::vec2(GAP, 6.0);
+            style.spacing.button_padding = egui::vec2(8.0, 4.0);
         });
 
         let (mods, key) = parse_shortcut(&config.click_through_shortcut);
@@ -78,28 +114,16 @@ impl OverlayApp {
             snapshot: Snapshot::default(),
             speed: 100.0,
             speed_active: false,
-            depth: 300.0,
+            depth: 150.0,
             depth_active: false,
-            stroke: 50.0,
+            stroke: 30.0,
             stroke_active: false,
-            sensation: 0.0,
-            sensation_active: false,
-            keep_start: false,
-            pattern: 0,
-            user_speed_limit: 500.0,
-            limit_active: false,
-            home_margin: 15.0,
-            margin_active: false,
-            reversal: 0.35,
-            reversal_active: false,
-            patterns: Vec::new(),
             seeded: false,
             last_send: Instant::now()
                 .checked_sub(Duration::from_secs(10))
                 .unwrap_or_else(Instant::now),
             click_through: config.click_through,
             shortcut: (mods, key),
-            shortcut_label: config.click_through_shortcut.clone(),
             config,
             config_path,
             last_config_check: Instant::now(),
@@ -111,35 +135,25 @@ impl OverlayApp {
         self.last_send = Instant::now();
     }
 
-    /// Drain snapshots, keeping only the newest, and seed the editable values
-    /// on the first connected snapshot.
+    /// Drain snapshots, keeping only the newest, and seed the editable values on
+    /// the first connected snapshot.
     fn drain_snapshots(&mut self) {
         while let Ok(snap) = self.worker.snap_rx.try_recv() {
             self.snapshot = snap;
         }
         if !self.seeded && self.snapshot.connected {
             let s = &self.snapshot.state;
-            let t = &self.snapshot.settings;
             self.speed = s.speed;
             self.depth = s.depth;
             self.stroke = s.stroke;
-            self.sensation = s.sensation;
-            self.pattern = s.pattern;
-            self.keep_start = s.keep_stroke_start;
-            self.user_speed_limit = t.user_speed_limit;
-            self.home_margin = t.home_margin;
-            self.reversal = t.reversal_acceleration_factor;
-            if self.patterns.is_empty() {
-                self.patterns = FALLBACK_PATTERNS.iter().map(|s| s.to_string()).collect();
-            }
             self.seeded = true;
         }
     }
 
-    /// Copy the device's view of the commands back into the widgets — but never
+    /// Copy the device's view of the commands back into the widgets - but never
     /// while the user is dragging something or a command is still in flight,
-    /// otherwise a slider springs back under the finger. The firmware clamps
-    /// every command, so what comes back is what the machine is really doing.
+    /// otherwise a slider springs back under the hand. The firmware clamps every
+    /// command, so what comes back is what the machine is really doing.
     fn refresh_from_device(&mut self, ctx: &egui::Context) {
         if !self.snapshot.connected {
             return;
@@ -150,7 +164,6 @@ impl OverlayApp {
             return;
         }
         let s = &self.snapshot.state;
-        let t = &self.snapshot.settings;
         if !self.speed_active {
             self.speed = s.speed;
         }
@@ -159,20 +172,6 @@ impl OverlayApp {
         }
         if !self.stroke_active {
             self.stroke = s.stroke;
-        }
-        if !self.sensation_active {
-            self.sensation = s.sensation;
-        }
-        self.pattern = s.pattern;
-        self.keep_start = s.keep_stroke_start;
-        if !self.limit_active {
-            self.user_speed_limit = t.user_speed_limit;
-        }
-        if !self.margin_active {
-            self.home_margin = t.home_margin;
-        }
-        if !self.reversal_active {
-            self.reversal = t.reversal_acceleration_factor;
         }
     }
 
@@ -213,7 +212,7 @@ impl OverlayApp {
         self.click_through = !self.click_through;
         ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(self.click_through));
         // Persist so a restart and the external toggle agree. Re-read first so
-        // edits made elsewhere (device address, etc.) are not clobbered.
+        // edits made elsewhere (device address, and so on) are not clobbered.
         let mut cfg = std::fs::read_to_string(&self.config_path)
             .ok()
             .and_then(|t| toml::from_str::<Config>(&t).ok())
@@ -222,135 +221,77 @@ impl OverlayApp {
         let _ = cfg.save(&self.config_path);
     }
 
-    fn header(&mut self, ui: &mut egui::Ui) {
-        let width = ui.available_width();
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::drag());
+    /// A thin grip across the top: the only place that moves the window.
+    fn grip(&mut self, ui: &mut egui::Ui) {
+        let w = ui.available_width();
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 22.0), Sense::drag());
+        let painter = ui.painter();
+        let pill = Rect::from_center_size(rect.center(), egui::vec2(64.0, 5.0));
+        painter.rect_filled(pill, CornerRadius::same(2), grip_c());
         if resp.drag_started() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
-
-        let s = &self.snapshot.state;
-        let homing = s.servo_state == "HOMING";
-        let servo = if s.servo_state.is_empty() { "-" } else { s.servo_state.as_str() };
-        let homed_txt = if homing {
-            "HOMING"
-        } else if s.homed {
-            "homed"
-        } else {
-            "not homed"
-        };
-        let servo_color = if homing || !s.homed { WARN } else { DIM };
-        let servo_str = format!("{servo} · {homed_txt}");
-        let (conn_txt, conn_color) = if self.snapshot.connected {
-            ("● online", OK)
-        } else {
-            ("● offline", ERR)
-        };
-        let click_through = self.click_through;
-
-        let painter = ui.painter();
-        painter.text(
-            rect.left_center() + egui::vec2(2.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            "OSSM Stroke",
-            egui::FontId::proportional(14.0),
-            Color32::from_rgb(228, 230, 242),
-        );
-        if click_through {
-            painter.text(
-                rect.left_center() + egui::vec2(96.0, 1.0),
-                egui::Align2::LEFT_CENTER,
-                format!("click-through · {}", self.shortcut_label),
-                egui::FontId::proportional(10.5),
-                WARN,
-            );
-        }
-        let servo_rect = painter.text(
-            rect.right_center() - egui::vec2(2.0, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            servo_str,
-            egui::FontId::proportional(12.0),
-            servo_color,
-        );
-        painter.text(
-            egui::pos2(servo_rect.left() - 10.0, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            conn_txt,
-            egui::FontId::proportional(12.0),
-            conn_color,
-        );
     }
 
-    fn readout(&mut self, ui: &mut egui::Ui) {
-        let s = &self.snapshot.state;
-        let travel = if s.usable_travel > 0.0 { s.usable_travel } else { 347.0 };
-        let pattern_name = if s.pattern_name.is_empty() { "-" } else { s.pattern_name.as_str() };
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!("pos {:.1} mm", s.position)).color(Color32::from_rgb(210, 214, 228)));
-            ui.label(
-                RichText::new(format!("· {:.0} of {:.0} mm/s", s.speed_measured.abs(), s.speed))
-                    .color(Color32::from_rgb(210, 214, 228)),
-            );
-            ui.label(
-                RichText::new(format!(
-                    "· sweep {:.0}→{:.0} of {:.0} mm",
-                    s.sweep_start, s.depth, travel
-                ))
-                .color(DIM),
-            );
-            ui.label(RichText::new(format!("· {pattern_name}")).color(DIM));
-            if s.clipping {
-                ui.label(RichText::new("· CLIPPING").color(ERR).strong());
-            }
-            if s.setup != 0 {
-                ui.label(RichText::new(format!("· SETUP {}", s.setup)).color(WARN));
-            }
-        });
-        if let Some(err) = &self.snapshot.error {
-            ui.label(RichText::new(err.as_str()).color(ERR).small());
-        }
-    }
-
-    fn controls(&mut self, ui: &mut egui::Ui) {
+    /// One button, taller than a normal one, that starts and stops.
+    fn big_button(&mut self, ui: &mut egui::Ui) {
+        let w = ui.available_width();
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, BUTTON_H), Sense::click());
         let running = self.snapshot.state.run;
         let homed = self.snapshot.state.homed;
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(!running, egui::Button::new("▶ Start").fill(Color32::from_rgb(40, 122, 74)))
-                .clicked()
-            {
-                self.send_state(serde_json::json!({ "run": true }));
-            }
-            if ui
-                .add_enabled(running, egui::Button::new("■ Stop").fill(Color32::from_rgb(140, 52, 52)))
-                .clicked()
-            {
-                self.send_state(serde_json::json!({ "run": false }));
-            }
-            if ui.button("⌂ Home").clicked() {
-                self.send_state(serde_json::json!({ "home": true }));
-            }
-            if !homed {
-                ui.label(RichText::new("not homed").color(WARN).small());
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let label = if self.click_through {
-                    RichText::new("click-through ON").color(WARN)
-                } else {
-                    RichText::new("click-through")
-                };
-                if ui.button(label).on_hover_text("Toggle mouse click-through").clicked() {
-                    let ctx = ui.ctx().clone();
-                    self.toggle_click_through(&ctx);
-                }
-            });
-        });
+        let connected = self.snapshot.connected;
+        let can_act = connected && (running || homed);
+
+        let fill = if !can_act {
+            disabled_fill()
+        } else if running {
+            stop_fill()
+        } else {
+            start_fill()
+        };
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(12), fill);
+        if resp.hovered() && can_act {
+            painter.rect_filled(rect, CornerRadius::same(12), Color32::from_white_alpha(20));
+        }
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            if running { "STOP" } else { "START" },
+            FontId::proportional(22.0),
+            Color32::from_rgb(242, 244, 252),
+        );
+
+        let dot_color = if !connected {
+            ERR
+        } else if running || homed {
+            OK
+        } else {
+            WARN
+        };
+        let dot = egui::pos2(rect.left() + 16.0, rect.center().y);
+        painter.circle_filled(dot, 7.0, Color32::from_rgba_unmultiplied(10, 12, 16, 150));
+        painter.circle_filled(dot, 5.0, dot_color);
+
+        if resp.clicked() && can_act {
+            self.send_state(serde_json::json!({ "run": !running }));
+        }
+        if resp.hovered() {
+            let hint = if !connected {
+                "no connection to the machine"
+            } else if !homed && !running {
+                "the machine is not homed - start it from the browser once"
+            } else {
+                "start / stop"
+            };
+            resp.on_hover_text(hint);
+        }
     }
 
-    fn sliders(&mut self, ui: &mut egui::Ui) {
+    fn sliders_row(&mut self, ui: &mut egui::Ui) {
         let limit = if self.snapshot.settings.user_speed_limit >= 1.0 {
             self.snapshot.settings.user_speed_limit
         } else {
@@ -361,34 +302,29 @@ impl OverlayApp {
         } else {
             347.0
         };
-        let cmd = self.worker.cmd_tx.clone();
-        let mut sent = false;
-        ui.columns(2, |cols| {
-            sent |= value_slider(&mut cols[0], &mut self.speed, &mut self.speed_active, &cmd, "Speed mm/s", 1.0, limit, 1.0, "speed");
-            sent |= value_slider(&mut cols[0], &mut self.depth, &mut self.depth_active, &cmd, "Depth mm", 0.0, travel, 5.0, "depth");
-            sent |= value_slider(&mut cols[0], &mut self.stroke, &mut self.stroke_active, &cmd, "Stroke mm", 0.0, travel, 5.0, "stroke");
-            sent |= value_slider(&mut cols[1], &mut self.sensation, &mut self.sensation_active, &cmd, "Sensation", -100.0, 100.0, 5.0, "sensation");
-            sent |= pattern_combo(&mut cols[1], &mut self.pattern, &cmd, &self.patterns);
-            sent |= keep_toggle(&mut cols[1], &mut self.keep_start, &cmd);
-        });
-        if sent {
-            self.last_send = Instant::now();
-        }
-    }
+        let margin = self.snapshot.settings.home_margin.max(0.0);
+        // The firmware holds the near end of a sweep this far off the home point,
+        // so a stroke can never be as long as the depth.
+        let stroke_max = (self.depth - margin).clamp(5.0, travel);
 
-    fn tuning(&mut self, ui: &mut egui::Ui) {
-        let cmd = self.worker.cmd_tx.clone();
-        let mut sent = false;
-        egui::CollapsingHeader::new("Tuning and limits")
-            .id_salt("tuning")
-            .default_open(false)
-            .show(ui, |ui| {
-                sent |= settings_slider(ui, &mut self.user_speed_limit, &mut self.limit_active, &cmd, "Speed slider limit mm/s", 50.0, 700.0, 10.0, "user_speed_limit");
-                sent |= settings_slider(ui, &mut self.home_margin, &mut self.margin_active, &cmd, "Home margin mm", 0.0, 50.0, 5.0, "home_margin");
-                sent |= settings_slider(ui, &mut self.reversal, &mut self.reversal_active, &cmd, "Reversal accel factor", 0.05, 1.0, 0.05, "reversal_acceleration_factor");
-            });
-        if sent {
-            self.last_send = Instant::now();
+        let h = (ui.available_height() - 22.0).max(70.0);
+        let w = ((ui.available_width() - GAP * 2.0) / 3.0).floor().max(48.0);
+
+        let mut patch = serde_json::Map::new();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            if v_slider(ui, &mut self.speed, &mut self.speed_active, 1.0, limit, 1.0, "SPEED", w, h) {
+                patch.insert("speed".into(), serde_json::Value::from(self.speed));
+            }
+            if v_slider(ui, &mut self.depth, &mut self.depth_active, 0.0, travel, 5.0, "DEPTH", w, h) {
+                patch.insert("depth".into(), serde_json::Value::from(self.depth));
+            }
+            if v_slider(ui, &mut self.stroke, &mut self.stroke_active, 0.0, stroke_max, 5.0, "STROKE", w, h) {
+                patch.insert("stroke".into(), serde_json::Value::from(self.stroke));
+            }
+        });
+        if !patch.is_empty() {
+            self.send_state(serde_json::Value::Object(patch));
         }
     }
 }
@@ -408,141 +344,122 @@ impl eframe::App for OverlayApp {
         self.handle_shortcut(&ctx);
 
         let panel = egui::Frame::NONE
-            .fill(Color32::from_rgba_unmultiplied(16, 16, 22, 214))
-            .stroke(egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(130, 135, 160, 110)))
-            .corner_radius(egui::CornerRadius::same(14))
-            .inner_margin(egui::Margin::same(9));
+            .fill(panel_alpha_of(self.config.panel_alpha))
+            .stroke(egui::Stroke::new(1.0, border()))
+            .corner_radius(CornerRadius::same(16))
+            .inner_margin(egui::Margin::same(10));
 
         egui::CentralPanel::default().frame(panel).show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    self.header(ui);
-                    ui.add_space(2.0);
-                    self.readout(ui);
-                    ui.add_space(3.0);
-                    self.controls(ui);
-                    ui.add_space(3.0);
-                    self.sliders(ui);
-                    ui.add_space(2.0);
-                    self.tuning(ui);
-                });
+            self.grip(ui);
+            ui.add_space(4.0);
+            self.big_button(ui);
+            ui.add_space(8.0);
+            self.sliders_row(ui);
         });
 
-        // Keep the readout ticking even when the pointer is idle.
-        ctx.request_repaint_after(Duration::from_millis(120));
+        // Keep the status dot and the values alive while the pointer is idle.
+        ctx.request_repaint_after(Duration::from_millis(150));
     }
 }
 
-fn patch_f32(key: &str, value: f32) -> serde_json::Value {
-    let mut map = serde_json::Map::new();
-    map.insert(key.to_string(), serde_json::Value::from(value));
-    serde_json::Value::Object(map)
-}
-
-fn patch_bool(key: &str, value: bool) -> serde_json::Value {
-    let mut map = serde_json::Map::new();
-    map.insert(key.to_string(), serde_json::Value::from(value));
-    serde_json::Value::Object(map)
-}
-
-/// A labelled slider bound to a `f32`. Returns true when it sent a command.
-#[allow(clippy::too_many_arguments)]
-fn value_slider(
+/// A tall, fat vertical slider that prints its value in the thumb.
+///
+/// Written by hand instead of using `egui::Slider` because that widget fixes the
+/// rail thickness and the handle size; this one needs a rail wide enough to hit
+/// from across a room and a thumb big enough to read at a glance.
+fn v_slider(
     ui: &mut egui::Ui,
     value: &mut f32,
     active: &mut bool,
-    cmd: &Sender<Command>,
-    label: &str,
     min: f32,
     max: f32,
-    step: f64,
-    key: &str,
-) -> bool {
-    let resp = ui.add(
-        egui::Slider::new(&mut *value, min..=max)
-            .step_by(step)
-            .text(label),
-    );
-    *active = resp.dragged() || resp.has_focus();
-    if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
-        let _ = cmd.send(Command::Patch(patch_f32(key, *value)));
-        true
-    } else {
-        false
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn settings_slider(
-    ui: &mut egui::Ui,
-    value: &mut f32,
-    active: &mut bool,
-    cmd: &Sender<Command>,
+    step: f32,
     label: &str,
-    min: f32,
-    max: f32,
-    step: f64,
-    key: &str,
+    width: f32,
+    height: f32,
 ) -> bool {
-    let resp = ui.add(
-        egui::Slider::new(&mut *value, min..=max)
-            .step_by(step)
-            .text(label),
-    );
-    *active = resp.dragged() || resp.has_focus();
-    if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
-        let _ = cmd.send(Command::SettingsPatch(patch_f32(key, *value)));
-        true
-    } else {
-        false
-    }
-}
+    let mut sent = false;
+    ui.vertical(|ui| {
+        let (label_rect, _) = ui.allocate_exact_size(egui::vec2(width, 18.0), Sense::hover());
+        let galley = ui.painter().layout_no_wrap(
+            label.to_owned(),
+            FontId::proportional(14.5),
+            label_c(),
+        );
+        let pill = Rect::from_center_size(label_rect.center(), galley.size() + egui::vec2(14.0, 6.0));
+        ui.painter().rect_filled(pill, CornerRadius::same(7), Color32::from_rgba_unmultiplied(8, 10, 14, 150));
+        ui.painter().galley(label_rect.center() - galley.size() / 2.0, galley, label_c());
 
-fn pattern_combo(
-    ui: &mut egui::Ui,
-    pattern: &mut i32,
-    cmd: &Sender<Command>,
-    patterns: &[String],
-) -> bool {
-    let selected = patterns
-        .get(*pattern as usize)
-        .map(String::as_str)
-        .unwrap_or("—");
-    let mut changed = false;
-    egui::ComboBox::from_id_salt("pattern_combo")
-        .width(ui.available_width().min(150.0))
-        .selected_text(selected)
-        .show_ui(ui, |ui| {
-            for (i, name) in patterns.iter().enumerate() {
-                if ui.selectable_value(pattern, i as i32, name.as_str()).clicked() {
-                    changed = true;
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click_and_drag());
+        *active = resp.dragged() || resp.is_pointer_button_down_on();
+
+        let rail_w = (rect.width() * 0.72).max(24.0);
+        let rail = Rect::from_center_size(rect.center(), egui::vec2(rail_w, rect.height()));
+        let radius = CornerRadius::same((rail_w / 2.0).round().clamp(0.0, 255.0) as u8);
+
+        // The thumb travels between the rail ends, so map the pointer over that
+        // same range and the thumb always lands under it.
+        let travel_top = rail.top() + THUMB_H / 2.0;
+        let travel_bot = rail.bottom() - THUMB_H / 2.0;
+        let span = (travel_bot - travel_top).max(1.0);
+
+        if (resp.dragged() || resp.clicked()) && max > min {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let t = ((travel_bot - p.y) / span).clamp(0.0, 1.0);
+                let raw = min + t * (max - min);
+                let quantised = ((raw / step).round() * step).clamp(min, max);
+                if (quantised - *value).abs() > f32::EPSILON {
+                    *value = quantised;
                 }
             }
-        });
-    ui.label(RichText::new("Pattern").small().color(DIM));
-    if changed {
-        let mut map = serde_json::Map::new();
-        map.insert("pattern".to_string(), serde_json::Value::from(*pattern));
-        let _ = cmd.send(Command::Patch(serde_json::Value::Object(map)));
-        true
-    } else {
-        false
-    }
+        }
+
+        let t = if max > min {
+            ((*value - min) / (max - min)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let thumb_y = travel_bot - span * t;
+
+        let painter = ui.painter();
+        painter.rect_filled(rail, radius, rail_c());
+        if t > 0.001 {
+            let filled = Rect::from_min_max(egui::pos2(rail.left(), thumb_y), rail.max);
+            painter.rect_filled(filled, radius, fill_c());
+        }
+
+        let thumb = Rect::from_center_size(
+            egui::pos2(rect.center().x, thumb_y),
+            egui::vec2(rect.width() * 0.94, THUMB_H),
+        );
+        let hot = resp.hovered() || resp.dragged();
+        painter.rect_filled(thumb, CornerRadius::same(11), if hot { thumb_hot_c() } else { thumb_c() });
+        painter.rect_stroke(
+            thumb,
+            CornerRadius::same(11),
+            egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(10, 12, 18, 90)),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            thumb.center(),
+            Align2::CENTER_CENTER,
+            format!("{:.0}", *value),
+            FontId::proportional(17.0),
+            thumb_text(),
+        );
+
+        if hot {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+        if resp.drag_stopped() || (resp.clicked() && !resp.dragged()) {
+            sent = true;
+        }
+    });
+    sent
 }
 
-fn keep_toggle(ui: &mut egui::Ui, keep: &mut bool, cmd: &Sender<Command>) -> bool {
-    let resp = ui.checkbox(keep, "Keep stroke start");
-    if resp.changed() {
-        let _ = cmd.send(Command::Patch(patch_bool("keep_stroke_start", *keep)));
-        true
-    } else {
-        false
-    }
-}
-
-/// Parse `"Ctrl+Shift+O"` into egui modifiers plus a key. Unknown key names
-/// fall back to `O`, which keeps the escape hatch usable even if the config is
+/// Parse `"Ctrl+Shift+O"` into egui modifiers plus a key. Unknown key names fall
+/// back to `O`, which keeps the escape hatch usable even if the config is
 /// mistyped.
 fn parse_shortcut(spec: &str) -> (egui::Modifiers, egui::Key) {
     let mut mods = egui::Modifiers::default();

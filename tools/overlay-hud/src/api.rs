@@ -23,6 +23,10 @@ use std::time::Duration;
 /// used until the WebSocket `strokePatterns` list arrives. Index == firmware
 /// pattern index. The commented-out patterns (Wave, Jack Hammer, Stroke
 /// Nibbler) are not compiled in.
+/// The firmware's pattern names, kept for reference and for a future
+/// pattern selector. Unused while the overlay only drives speed, depth and
+/// stroke.
+#[allow(dead_code)]
 pub const FALLBACK_PATTERNS: &[&str] = &[
     "Simple Stroke",
     "Teasing or Pounding",
