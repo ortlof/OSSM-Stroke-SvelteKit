@@ -98,6 +98,14 @@ volatile float telemetryPositionMm = 0.0f;
 volatile float telemetrySpeedMmPerSecond = 0.0f;
 volatile bool telemetryClipping = false;
 
+// Published for ModbusProbeService's lost-step monitor: the firmware's own step
+// count and its steps-per-mm scaled by 1000, so the monitor can stay in integer
+// arithmetic. Plain aligned 32-bit values, read by the Modbus task without a
+// lock. The drive's closed loop knows its own encoder position; this is the only
+// place the firmware exposes what it thinks it commanded.
+volatile int32_t modbusFirmwareSteps = 0;
+volatile int32_t modbusFirmwareStepsPerMmX1000 = (int32_t)(OSSM_STEP_PER_MM * 1000.0f);
+
 TaskHandle_t speedTaskHandle = nullptr;
 TaskHandle_t strokeSyncHandle = nullptr;
 
@@ -192,6 +200,7 @@ static void loadSettings()
     servoMotor.maxSpeed = settings.max_speed;
     servoMotor.maxAcceleration = settings.max_acceleration;
     servoMotor.stepsPerMillimeter = settings.steps_per_mm;
+    modbusFirmwareStepsPerMmX1000 = (int32_t)(settings.steps_per_mm * 1000.0f + 0.5f);
     servoMotor.invertDirection = settings.invert_direction;
     servoMotor.enableActiveLow = true;
     servoMotor.stepPin = SERVO_PULSE;
@@ -425,6 +434,8 @@ void syncStrokeStateTask(void *pvParameters)
         // 0.1 mm resolution: no point in pushing noise over the wire
         float stepsPerMm = (servoMotor.stepsPerMillimeter > 0.0f) ? servoMotor.stepsPerMillimeter : 1.0f;
         float rawMm = float(stepperDriver.getCurrentPosition()) / stepsPerMm;
+        // The firmware's own step count, for the Modbus lost-step monitor.
+        modbusFirmwareSteps = stepperDriver.getCurrentPosition();
         float positionMm = roundf(rawMm * 10.0f) / 10.0f;
 
         // Measured speed over the last period, from the unsmoothed position and

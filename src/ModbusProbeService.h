@@ -2,21 +2,43 @@
 #define ModbusProbeService_h
 
 /*
- *   Read-only Modbus RTU probe for the JMC iHSV57 servo drive.
+ *   Modbus RTU link to the JMC iHSV57 servo drive.
  *
  *   The drive's RS232 port is wired to the OSSM v2.3 board's RS232 header, which
  *   goes through an on-board SP3232E transceiver on GPIO 16 (RX) and GPIO 17
  *   (TX). Those two pins are used nowhere else in this firmware.
  *
- *   This service only ever reads. It exists to prove the link before anyone
- *   writes a single register to the drive: every frame it sends is a function 3
- *   (read holding registers) request, so it cannot change anything on the drive.
+ *   Three jobs, all on one link and all on one task:
+ *     1. identification probe - walks the candidate line settings and reports
+ *        which one answers (read only).
+ *     2. range read - reads a block of holding registers (function 3) so the
+ *        drive's register map can be identified from the browser.
+ *     3. torque limit - writes 0x01FE (forward) and 0x01FF (reverse) with
+ *        function 6, and always reads both back. A position monitor that polls
+ *        the drive's own encoder position and compares it against the firmware's
+ *        step count exposes lost steps.
  *
- *   A POST of {"run": true} to /rest/modbusProbe asks for one probe. A task
- *   notices the flag, walks the candidate line settings one at a time, and
- *   publishes the result here so the browser can read it back with a GET. A
- *   later POST arms a second probe; nothing is written to flash, so a reboot
- *   simply returns to the compiled-in defaults.
+ *   ONE OWNER OF SERIAL2. A UART has one transmitter. This task is the only
+ *   code that ever calls Serial2. The HTTP handler does nothing but set request
+ *   flags in the state; the task notices them, performs the serial work in
+ *   order, and publishes the answer. Two writers on one UART is how a frame
+ *   gets corrupted, and a corrupted frame during a torque write is the mistake
+ *   that matters here.
+ *
+ *   A POST to /rest/modbusProbe carries any of these fields:
+ *     {"run": true}                                   identification probe
+ *     {"read_reg": N, "read_count": M}                range read, function 3
+ *     {"torque_forward": X, "torque_reverse": Y, "apply": true}
+ *     {"mb_rebaseline": true}                         re-baseline the monitor
+ *     {"mb_position_register": R, "mb_counts_per_mm": C,
+ *      "mb_enabled": b, "mb_poll_ms": T}              monitor settings
+ *   A GET returns the whole state. Nothing is written to flash, so a reboot
+ *   returns to the compiled-in defaults.
+ *
+ *   SAFETY. The only registers this firmware may ever write are 0x01FE and
+ *   0x01FF and only with values the guard in ModbusRtu.h accepts. There is no
+ *   generic write path and no function 5 or 15. Values out of range are refused
+ *   rather than clamped, so the operator always knows what the drive was told.
  */
 
 #include <Arduino.h>
@@ -33,34 +55,86 @@
 // One drive on one point-to-point link: unit id 1, addressed directly.
 #define MODBUS_PROBE_UNIT 1
 #define MODBUS_PROBE_TIMEOUT_MS 150
-// The register the original firmware wrote its torque limit to. Read here, never
-// written.
-#define MODBUS_PROBE_TORQUE_REG 0x01FE
 
 // RX and TX of the board's RS232 header, behind the SP3232E transceiver.
 #define MODBUS_PROBE_RX_PIN 16
 #define MODBUS_PROBE_TX_PIN 17
 
+// The line that answered in the original probe; every later operation opens the
+// port with these settings.
+#define MODBUS_PROBE_DEFAULT_BAUD 57600
+#define MODBUS_PROBE_DEFAULT_CONFIG SERIAL_8E1
+
+// Poll interval floor for the position monitor: the drive and the link are not
+// here to be hammered, and a lost-step figure wants a machine that has moved.
+#define MODBUS_PROBE_POLL_MIN_MS 500
+#define MODBUS_PROBE_POLL_DEFAULT_MS 500
+
+// The firmware's own step count and its steps-per-mm, scaled by 1000 so the
+// monitor can stay in integer arithmetic. Owned by main.cpp (the motion side);
+// read here as plain aligned 32-bit values, so no lock is needed.
+extern volatile int32_t modbusFirmwareSteps;
+extern volatile int32_t modbusFirmwareStepsPerMmX1000;
+
 class ModbusProbeState
 {
 public:
-    // --- command ---
-    bool run = false;  // POST {"run": true} requests one probe
+    // --- requests (writable from a POST; the task consumes them) ---
+    bool run = false;          // POST {"run": true} requests one probe
+    bool readPending = false;  // a range read has been requested
+    int readReg = -1;          // requested start register, -1 = none
+    int readCount = 0;         // requested register count
+    bool torquePending = false;// a torque write has been requested and validated
+    int torqueForwardReq = 0;  // requested forward value (0.1 %)
+    int torqueReverseReq = 0;  // requested reverse value (0.1 %)
+    bool rebaseline = false;   // transient: re-baseline the position reference
 
-    // --- status ---
+    // --- position monitor settings (writable from a POST) ---
+    int mbPositionRegister = 0xFFFF;  // drive register with the encoder position; 0xFFFF disables
+    int mbCountsPerMm = 0;            // drive counts per mm of carriage travel; 0 disables
+    bool mbEnabled = false;           // the monitor runs only when this is true
+    int mbPollMs = MODBUS_PROBE_POLL_DEFAULT_MS;  // poll interval, floored at 500 ms
+
+    // --- status (owned by the task) ---
     bool running = false;  // a probe is executing right now
     bool done = false;     // a probe has finished since the request
     bool ok = false;       // the last finished probe got a valid reply
+    int baud = 0;          // line speed that answered, 0 if nothing did
+    String cfg = "";       // framing that answered, "8E1" or "8N1"
+    int unit = 0;          // unit id that answered
+    int val = 0;           // value of holding register 0x0000
+    int treg = 0;          // torque-limit register (0x01FE)
+    int tval = -1;         // its raw value, -1 if the read failed
+    String tried = "";     // one "baud cfg addrN: result" note per attempt
 
-    // --- result ---
-    int baud = 0;       // line speed that answered, 0 if nothing did
-    String cfg = "";    // framing that answered, "8E1" or "8N1"
-    int unit = 0;       // unit id that answered
-    int val = 0;        // value of holding register 0x0000
-    int treg = 0;       // torque-limit register (0x01FE)
-    int tval = -1;      // its raw value, -1 if the read failed
-    String tried = "";  // one "baud cfg addrN: result" note per attempt
-    String msg = "";    // short headline for the UI
+    // --- range-read result ---
+    int rreg = -1;         // register the last read asked for
+    int rcount = 0;        // registers the last read asked for
+    bool rok = false;      // the read answered with valid data
+    int rn = 0;            // number of values published
+    int rvals[32] = {0};   // the values, published as a decimal array
+    String rhex = "";      // the same values as space-separated hex words
+    int rerr = 0;          // Modbus exception code from the read, 0 if none
+
+    // --- torque result ---
+    int tfreq = 0;         // forward value last requested
+    int trreq = 0;         // reverse value last requested
+    int tfread = -1;       // forward value read back, -1 if unknown
+    int trread = -1;       // reverse value read back, -1 if unknown
+    bool twrote = false;   // both function 6 writes got a valid echo
+    bool tok = false;      // both registers were read back successfully
+
+    // --- position monitor result ---
+    bool mbok = false;         // the last poll got a valid drive position
+    int mbReg = -1;            // raw drive register value, -1 if unknown
+    int mbFwMmMilli = 0;       // firmware position in milli-mm
+    int mbTravelledMilli = 0;  // mm travelled since the reference, milli-mm
+    int mbExpected = 0;        // drive counts expected from the mm travelled
+    int mbActual = 0;          // drive counts actually seen since the reference
+    int mbLost = 0;            // lost counts (expected - actual)
+    int mbLostMmMilli = 0;     // lost millimetres, milli-mm
+
+    String msg = "";  // short headline for the UI / a rejection reason
 
     static void read(ModbusProbeState &state, JsonObject &root)
     {
@@ -76,36 +150,161 @@ public:
         root["tval"] = state.tval;
         root["tried"] = state.tried;
         root["msg"] = state.msg;
+
+        root["read_reg"] = state.rreg;
+        root["read_count"] = state.rcount;
+        root["read_ok"] = state.rok;
+        root["read_err"] = state.rerr;
+        root["read_hex"] = state.rhex;
+        JsonArray values = root["read_values"].to<JsonArray>();
+        for (int i = 0; i < state.rn && i < 32; i++)
+        {
+            values.add(state.rvals[i]);
+        }
+
+        root["torque_forward_requested"] = state.tfreq;
+        root["torque_reverse_requested"] = state.trreq;
+        root["torque_forward_readback"] = state.tfread;
+        root["torque_reverse_readback"] = state.trread;
+        root["torque_wrote"] = state.twrote;
+        root["torque_ok"] = state.tok;
+
+        root["mb_position_register"] = state.mbPositionRegister;
+        root["mb_counts_per_mm"] = state.mbCountsPerMm;
+        root["mb_enabled"] = state.mbEnabled;
+        root["mb_poll_ms"] = state.mbPollMs;
+        root["mb_ok"] = state.mbok;
+        root["mb_reg_value"] = state.mbReg;
+        root["mb_fw_mm_milli"] = state.mbFwMmMilli;
+        root["mb_travelled_mm_milli"] = state.mbTravelledMilli;
+        root["mb_expected_counts"] = state.mbExpected;
+        root["mb_actual_counts"] = state.mbActual;
+        root["mb_lost_counts"] = state.mbLost;
+        root["mb_lost_mm_milli"] = state.mbLostMmMilli;
     }
 
     static StateUpdateResult update(JsonObject &root, ModbusProbeState &state, const String &originId)
     {
-        // Only the request flag is writable. The task owns every other field, so
-        // a client cannot fake a result.
-        bool run = root["run"] | state.run;
-        if (run == state.run)
+        // This runs in the HTTP task under the state mutex and must never touch
+        // Serial2. It validates, records the request or the rejection, and the
+        // probe task picks the request up on its next pass.
+        bool changed = false;
+
+        // --- position monitor settings ---
+        int posReg = root["mb_position_register"] | state.mbPositionRegister;
+        int countsPerMm = root["mb_counts_per_mm"] | state.mbCountsPerMm;
+        bool mbEnabled = root["mb_enabled"] | state.mbEnabled;
+        int pollMs = root["mb_poll_ms"] | state.mbPollMs;
+        if (pollMs < MODBUS_PROBE_POLL_MIN_MS)
         {
-            return StateUpdateResult::UNCHANGED;
+            pollMs = MODBUS_PROBE_POLL_MIN_MS;  // no faster than the floor
+        }
+        if (posReg < 0) posReg = 0;
+        if (posReg > 0xFFFF) posReg = 0xFFFF;
+        if (countsPerMm < 0) countsPerMm = 0;
+        if (posReg != state.mbPositionRegister || countsPerMm != state.mbCountsPerMm ||
+            mbEnabled != state.mbEnabled || pollMs != state.mbPollMs)
+        {
+            state.mbPositionRegister = posReg;
+            state.mbCountsPerMm = countsPerMm;
+            state.mbEnabled = mbEnabled;
+            state.mbPollMs = pollMs;
+            changed = true;
         }
 
-        state.run = run;
-        if (run)
+        // --- range read request ---
+        if (!root["read_reg"].isNull() || !root["read_count"].isNull())
         {
-            // A fresh request: drop the previous answer so the UI cannot show a
-            // stale result while the new probe runs.
-            state.running = true;
-            state.done = false;
-            state.ok = false;
-            state.baud = 0;
-            state.cfg = "";
-            state.unit = 0;
-            state.val = 0;
-            state.treg = 0;
-            state.tval = -1;
-            state.tried = "";
-            state.msg = "queued";
+            int reg = root["read_reg"] | -1;
+            int count = root["read_count"] | 0;
+            if (!modbus_rtu::readRangeValid(reg, count))
+            {
+                // Refuse, and say why. A range read is only a read, but a
+                // request that lies about what it wants must not be acted on.
+                state.rreg = reg;
+                state.rcount = count;
+                state.rok = false;
+                state.rn = 0;
+                state.rhex = "";
+                state.rerr = 0;
+                state.msg = "read rejected: register 0x0000..0x1FFF, count 1..32";
+                changed = true;
+            }
+            else
+            {
+                state.rreg = reg;
+                state.rcount = count;
+                state.readPending = true;
+                state.msg = "range read queued";
+                changed = true;
+            }
         }
-        return StateUpdateResult::CHANGED;
+
+        // --- torque write request ---
+        if (root["apply"] | false)
+        {
+            bool hasFwd = !root["torque_forward"].isNull();
+            bool hasRev = !root["torque_reverse"].isNull();
+            int fwd = root["torque_forward"] | 0;
+            int rev = root["torque_reverse"] | 0;
+            if (!hasFwd || !hasRev)
+            {
+                state.tok = false;
+                state.twrote = false;
+                state.msg = "torque rejected: torque_forward and torque_reverse are both required";
+                changed = true;
+            }
+            else if (!modbus_rtu::torqueLimitValid(fwd) || !modbus_rtu::torqueLimitValid(rev))
+            {
+                // Not clamped. A torque value is a mechanical safety limit and
+                // the operator has to know the request was refused.
+                state.tok = false;
+                state.twrote = false;
+                state.msg = "torque rejected: each value must be 100..3000 (10.0..300.0 %)";
+                changed = true;
+            }
+            else
+            {
+                state.torqueForwardReq = fwd;
+                state.torqueReverseReq = rev;
+                state.torquePending = true;
+                state.msg = "torque write queued";
+                changed = true;
+            }
+        }
+
+        // --- position monitor re-baseline ---
+        if (root["mb_rebaseline"] | false)
+        {
+            state.rebaseline = true;
+            changed = true;
+        }
+
+        // --- identification probe ---
+        bool run = root["run"] | state.run;
+        if (run != state.run)
+        {
+            state.run = run;
+            if (run)
+            {
+                // A fresh request: drop the previous answer so the UI cannot
+                // show a stale result while the new probe runs.
+                state.running = true;
+                state.done = false;
+                state.ok = false;
+                state.baud = 0;
+                state.cfg = "";
+                state.unit = 0;
+                state.val = 0;
+                state.treg = 0;
+                state.tval = -1;
+                state.tried = "";
+                state.msg = "queued";
+            }
+            changed = true;
+        }
+
+        return changed ? StateUpdateResult::CHANGED : StateUpdateResult::UNCHANGED;
     }
 };
 
@@ -121,9 +320,25 @@ private:
 
     void probeLoop();
     void runProbe();
+    void runRangeRead(int reg, int count);
+    void runTorqueWrite(int forwardRaw, int reverseRaw);
+    void runPositionPoll(int positionRegister, int countsPerMm);
+    void openPort();
 
     HttpEndpoint<ModbusProbeState> _httpEndpoint;
     TaskHandle_t _probeTaskHandle = nullptr;
+
+    // Line settings that answered, reused by every operation after the probe.
+    uint32_t _lineBaud = MODBUS_PROBE_DEFAULT_BAUD;
+    uint32_t _lineConfig = MODBUS_PROBE_DEFAULT_CONFIG;
+
+    // Position monitor reference and poll bookkeeping, owned by the task.
+    bool _posRefValid = false;      // a reference has been taken this cycle
+    int32_t _posRefSteps = 0;       // firmware step count at the reference
+    int32_t _posRefDrive = 0;       // drive register value at the reference
+    int _posAppliedReg = -1;        // config the current cycle was started with
+    int _posAppliedCounts = -1;
+    uint32_t _lastPollMs = 0;
 };
 
 #endif  // ModbusProbeService_h

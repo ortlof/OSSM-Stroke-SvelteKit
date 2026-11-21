@@ -2,7 +2,7 @@
 #define ModbusRtu_h
 
 /*
- *   Hand-rolled Modbus RTU framing, read side only.
+ *   Hand-rolled Modbus RTU framing: function 3 reads, and one narrow write.
  *
  *   This header deliberately pulls in nothing but <stdint.h> and <stddef.h>.
  *   The firmware uses it from ModbusProbeService.cpp and the host test compiles
@@ -10,9 +10,12 @@
  *   and of the frame layout - no copy inside the test that can quietly drift
  *   away from what runs on the device.
  *
- *   Only function 3 (read holding registers) exists here. There is no write
- *   path on purpose: this build must not be able to change anything on the
- *   drive, so the code that can put a frame on the wire can only ever ask.
+ *   The only write that exists here is function 6 (write single register) and
+ *   the callers in ModbusProbeService.cpp may only ever point it at the two
+ *   torque-limit registers, 0x01FE and 0x01FF, with a value the guard below
+ *   accepts. There is no function 5, no function 15 and no generic
+ *   write-register API anywhere in this build: the code that can put a frame on
+ *   the wire can read any holding register and can write exactly two.
  *
  *   The Modbus 3.5 character silent interval is not modelled: the caller flushes
  *   the receive buffer before a request and keeps a single request in flight at
@@ -69,7 +72,7 @@ inline uint8_t buildReadRequest(uint8_t *buf, uint8_t unit, uint16_t start, uint
     return MODBUS_RTU_REQUEST_LEN;
 }
 
-// Outcome of checkReadReply.
+// Outcome of checkReadReply / checkWriteReply.
 enum ReadReply
 {
     REPLY_OK = 0,
@@ -77,7 +80,8 @@ enum ReadReply
     REPLY_BAD_CRC,     // checksum mismatch
     REPLY_BAD_UNIT,    // answered, but not the unit we asked
     REPLY_BAD_FUNCTION,// function byte is neither the expected one nor an exception
-    REPLY_EXCEPTION    // function byte has 0x80 set; the code is in *exceptionCode
+    REPLY_EXCEPTION,   // function byte has 0x80 set; the code is in *exceptionCode
+    REPLY_BAD_ECHO     // write reply did not echo the register and value we sent
 };
 
 // Validate a reply to a function 3 request. Checks length, CRC and the unit id,
@@ -121,9 +125,121 @@ inline ReadReply checkReadReply(const uint8_t *frame, size_t len, uint8_t expect
     return REPLY_OK;
 }
 
+// ---------------------------------------------------------------------------
+// Read request validation. A range read is a diagnostic: it may ask for any
+// block of holding registers the drive exposes, but only one 32-register window
+// that stays inside the map this project considers safe to look at.
+// ---------------------------------------------------------------------------
+
+#define MODBUS_READ_REG_MAX 0x1FFF
+#define MODBUS_READ_COUNT_MAX 32
+// Longest function-3 reply: unit + function + byte count + 2*count data + crc.
+#define MODBUS_RTU_READ_REPLY_MAX (3 + 2 * MODBUS_READ_COUNT_MAX + 2)
+
+// True when [start, start+count-1] is a legal read window. Both ends are checked
+// so a request can never walk off the top of the allowed register map.
+inline bool readRangeValid(int32_t start, int32_t count)
+{
+    return start >= 0 && start <= MODBUS_READ_REG_MAX &&
+           count >= 1 && count <= MODBUS_READ_COUNT_MAX &&
+           (start + count - 1) <= MODBUS_READ_REG_MAX;
+}
+
+// ---------------------------------------------------------------------------
+// Write path: function 6 (write single register) and nothing else.
+//
+// The iHSV57 torque limit is a mechanical safety limit. It lives in 0x01FE
+// (forward) and 0x01FF (reverse) with a scale of 0.1 %, so 2000 is 200.0 %.
+// This window is the whole point of the guard: eat a step at 300 % and the rack
+// takes the load. torqueLimitValid is deliberately a validator, not a clamper -
+// an out-of-range request must be refused, never quietly moved to the boundary,
+// because the operator has to know their number was not the one that got used.
+// ---------------------------------------------------------------------------
+
+#define MODBUS_TORQUE_REG_FORWARD 0x01FE
+#define MODBUS_TORQUE_REG_REVERSE 0x01FF
+#define MODBUS_TORQUE_MIN 100   // 10.0 %
+#define MODBUS_TORQUE_MAX 3000  // 300.0 %
+
+inline bool torqueLimitValid(int32_t value)
+{
+    return value >= MODBUS_TORQUE_MIN && value <= MODBUS_TORQUE_MAX;
+}
+
+// A function 6 request is exactly 8 bytes: unit, function, reg hi, reg lo,
+// value hi, value lo, crc lo, crc hi. The reply the drive sends echoes the same
+// eight bytes (or a five-byte exception).
+#define MODBUS_RTU_WRITE_REQUEST_LEN 8
+
+inline uint8_t buildWriteRequest(uint8_t *buf, uint8_t unit, uint16_t reg, uint16_t value)
+{
+    buf[0] = unit;
+    buf[1] = 0x06;  // write single register
+    buf[2] = (uint8_t)(reg >> 8);
+    buf[3] = (uint8_t)(reg & 0x00FF);
+    buf[4] = (uint8_t)(value >> 8);
+    buf[5] = (uint8_t)(value & 0x00FF);
+    uint16_t crc = crc16(buf, 6);
+    buf[6] = (uint8_t)(crc & 0x00FF);  // low byte first on the wire
+    buf[7] = (uint8_t)(crc >> 8);
+    return MODBUS_RTU_WRITE_REQUEST_LEN;
+}
+
+// Validate the echo to a function 6 write. Same gates as a read reply (length,
+// CRC, unit id, exception decode) plus the two that matter for a write: the
+// function byte must be 6, and the register and value must be the ones we sent.
+// A drive that answers something else must not be believed.
+inline ReadReply checkWriteReply(const uint8_t *frame, size_t len, uint8_t expectedUnit,
+                                 uint16_t expectedReg, uint16_t expectedValue, uint8_t *exceptionCode)
+{
+    if (len < 5)
+    {
+        return REPLY_TOO_SHORT;
+    }
+
+    uint16_t crc = crc16(frame, len - 2);
+    uint16_t wire = (uint16_t)frame[len - 2] | ((uint16_t)frame[len - 1] << 8);
+    if (crc != wire)
+    {
+        return REPLY_BAD_CRC;
+    }
+
+    if (frame[0] != expectedUnit)
+    {
+        return REPLY_BAD_UNIT;
+    }
+
+    if (frame[1] & 0x80)
+    {
+        if (exceptionCode != nullptr)
+        {
+            *exceptionCode = frame[2];
+        }
+        return REPLY_EXCEPTION;
+    }
+
+    if (frame[1] != 0x06)
+    {
+        return REPLY_BAD_FUNCTION;
+    }
+
+    if (len != MODBUS_RTU_WRITE_REQUEST_LEN)
+    {
+        return REPLY_TOO_SHORT;  // a normal function 6 reply is exactly eight bytes
+    }
+
+    uint16_t reg = ((uint16_t)frame[2] << 8) | (uint16_t)frame[3];
+    uint16_t value = ((uint16_t)frame[4] << 8) | (uint16_t)frame[5];
+    if (reg != expectedReg || value != expectedValue)
+    {
+        return REPLY_BAD_ECHO;
+    }
+
+    return REPLY_OK;
+}
+
 // Human text for a Modbus exception code, for the probe log. These are the codes
 // from the exception-response section of the specification, not function codes:
-// there is no function code here that changes anything.
 inline const char *exceptionText(uint8_t code)
 {
     switch (code)

@@ -39,10 +39,22 @@ size_t readReply(HardwareSerial &port, uint8_t *buf, size_t maxLen, uint32_t tim
         }
         if (got >= 5)
         {
-            // An exception reply is always 5 bytes; a normal one is
-            // unit + function + byte count + data + crc. Stop as soon as we have
-            // a whole frame instead of waiting out the deadline.
-            size_t expected = (buf[1] & 0x80) ? 5 : (3 + (size_t)buf[2] + 2);
+            // An exception reply is always five bytes. A function 3 reply
+            // announces its data length in the byte-count field; a function 6
+            // reply is a fixed eight-byte echo. Stop as soon as it is complete.
+            size_t expected;
+            if (buf[1] & 0x80)
+            {
+                expected = 5;
+            }
+            else if ((buf[1] & 0x7F) == 0x03)
+            {
+                expected = 3 + (size_t)buf[2] + 2;
+            }
+            else
+            {
+                expected = 8;  // function 6 echo
+            }
             if (expected > maxLen)
             {
                 expected = maxLen;
@@ -70,6 +82,8 @@ String resultText(modbus_rtu::ReadReply rr, uint8_t exc)
         return "unit";
     case modbus_rtu::REPLY_BAD_FUNCTION:
         return "func";
+    case modbus_rtu::REPLY_BAD_ECHO:
+        return "echo";
     case modbus_rtu::REPLY_EXCEPTION:
         return String("exc ") + String(exc, HEX) + " " + modbus_rtu::exceptionText(exc);
     case modbus_rtu::REPLY_TOO_SHORT:
@@ -95,7 +109,7 @@ void ModbusProbeService::begin()
 {
     _httpEndpoint.begin();
 
-    // One probe at a time, on core 0 next to the rest of the application logic.
+    // One job at a time, on core 0 next to the rest of the application logic.
     // Priority 2 stays below the network and the motion tasks; 4 kB is enough for
     // the short String log this task builds.
     xTaskCreatePinnedToCore(taskEntry, "modbusProbe", 4096, this, 2, &_probeTaskHandle, 0);
@@ -106,30 +120,126 @@ void ModbusProbeService::taskEntry(void *param)
     static_cast<ModbusProbeService *>(param)->probeLoop();
 }
 
+// The single owner of Serial2. Open the port with the line that answered, then
+// drop anything a previous request left in the receive buffer.
+void ModbusProbeService::openPort()
+{
+    Serial2.begin(_lineBaud, _lineConfig, MODBUS_PROBE_RX_PIN, MODBUS_PROBE_TX_PIN);
+    vTaskDelay(1);  // let the UART settle before the first byte
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
+}
+
 void ModbusProbeService::probeLoop()
 {
     for (;;)
     {
-        bool go = false;
+        // Pick up whatever the HTTP task queued, under the state lock, and clear
+        // the flags. Nothing here touches Serial2; that happens below, in order.
+        bool doProbe = false;
+        bool doRead = false;
+        int readReg = 0;
+        int readCount = 0;
+        bool doTorque = false;
+        int forwardRaw = 0;
+        int reverseRaw = 0;
+        bool doRebaseline = false;
+        int posReg = 0xFFFF;
+        int countsPerMm = 0;
+        bool mbEnabled = false;
+        int pollMs = MODBUS_PROBE_POLL_DEFAULT_MS;
+
         update([&](ModbusProbeState &s)
                {
-            if (!s.run)
+            bool changed = false;
+
+            if (s.run)
             {
-                return StateUpdateResult::UNCHANGED;
+                // Take the request: clear the flag so a later POST can arm a
+                // second probe, and mark the run so a GET shows progress.
+                s.run = false;
+                s.running = true;
+                s.tried = "";
+                s.msg = "probing";
+                doProbe = true;
+                changed = true;
             }
-            // Take the request: clear the flag so a later POST can arm a second
-            // probe, and mark the run so a GET shows progress.
-            s.run = false;
-            s.running = true;
-            s.tried = "";
-            s.msg = "probing";
-            go = true;
-            return StateUpdateResult::CHANGED; },
+            if (s.readPending)
+            {
+                s.readPending = false;
+                readReg = s.rreg;
+                readCount = s.rcount;
+                doRead = true;
+                changed = true;
+            }
+            if (s.torquePending)
+            {
+                s.torquePending = false;
+                forwardRaw = s.torqueForwardReq;
+                reverseRaw = s.torqueReverseReq;
+                doTorque = true;
+                changed = true;
+            }
+            if (s.rebaseline)
+            {
+                s.rebaseline = false;
+                doRebaseline = true;
+                changed = true;
+            }
+
+            posReg = s.mbPositionRegister;
+            countsPerMm = s.mbCountsPerMm;
+            mbEnabled = s.mbEnabled;
+            pollMs = s.mbPollMs;
+
+            return changed ? StateUpdateResult::CHANGED : StateUpdateResult::UNCHANGED; },
                MODBUS_PROBE_ORIGIN);
 
-        if (go)
+        // Every serial operation runs on this one task, one at a time.
+        if (doProbe)
         {
             runProbe();
+        }
+        if (doRead)
+        {
+            runRangeRead(readReg, readCount);
+        }
+        if (doTorque)
+        {
+            runTorqueWrite(forwardRaw, reverseRaw);
+        }
+        if (doRebaseline)
+        {
+            _posRefValid = false;
+        }
+
+        // Position monitor: one poll on this task, never faster than the floor.
+        if (mbEnabled && posReg != 0xFFFF && countsPerMm > 0)
+        {
+            if (posReg != _posAppliedReg || countsPerMm != _posAppliedCounts)
+            {
+                // New settings: start a fresh cycle and take the reference on
+                // the first successful poll.
+                _posAppliedReg = posReg;
+                _posAppliedCounts = countsPerMm;
+                _posRefValid = false;
+                _lastPollMs = millis() - (uint32_t)pollMs;  // poll now
+            }
+            uint32_t now = millis();
+            if ((uint32_t)(now - _lastPollMs) >= (uint32_t)pollMs)
+            {
+                runPositionPoll(posReg, countsPerMm);
+                _lastPollMs = millis();
+            }
+        }
+        else if (_posAppliedReg != -1)
+        {
+            // Monitor off: forget the cycle so a later enable re-baselines.
+            _posAppliedReg = -1;
+            _posAppliedCounts = -1;
+            _posRefValid = false;
         }
 
         // Plain non-blocking loop: never sit on the UART or the state lock.
@@ -183,6 +293,9 @@ void ModbusProbeService::runProbe()
             winBaud = (int)line.baud;
             winFraming = line.framing;
             winName = line.name;
+            // Remember the line for every later operation.
+            _lineBaud = line.baud;
+            _lineConfig = line.cfg;
             break;  // keep the port open for the follow-up read below
         }
 
@@ -190,10 +303,14 @@ void ModbusProbeService::runProbe()
     }
 
     int torque = -1;
+    int torqueRev = -1;
     if (found)
     {
-        // The torque-limit register the original firmware wrote to. Read only.
-        uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, MODBUS_PROBE_TORQUE_REG, 1);
+        // The two torque-limit registers the original firmware wrote to. Read
+        // both here so the state always shows what the drive currently holds,
+        // even when no write is requested; the write path lives in
+        // runTorqueWrite().
+        uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_FORWARD, 2);
         Serial2.write(request, reqLen);
         Serial2.flush();
 
@@ -205,7 +322,10 @@ void ModbusProbeService::runProbe()
         if (rr == modbus_rtu::REPLY_OK)
         {
             torque = (int)(uint16_t)(((uint16_t)reply[3] << 8) | reply[4]);
+            torqueRev = (int)(uint16_t)(((uint16_t)reply[5] << 8) | reply[6]);
             tried += torque;
+            tried += "/";
+            tried += torqueRev;
         }
         else
         {
@@ -227,10 +347,230 @@ void ModbusProbeService::runProbe()
         s.cfg = winFraming;
         s.unit = found ? MODBUS_PROBE_UNIT : 0;
         s.val = (int)value;
-        s.treg = MODBUS_PROBE_TORQUE_REG;
+        s.treg = MODBUS_TORQUE_REG_FORWARD;
         s.tval = torque;
+        // What the drive holds right now, whether or not a write was requested.
+        s.tfread = torque;
+        s.trread = torqueRev;
         s.tried = tried;
         s.msg = found ? (String("reply on ") + winName) : String("no reply");
+        return StateUpdateResult::CHANGED; },
+           MODBUS_PROBE_ORIGIN);
+}
+
+// Read a block of holding registers with function 3 and publish every value as a
+// decimal in an array plus the same words as hex. Read only: no register state
+// on the drive changes.
+void ModbusProbeService::runRangeRead(int reg, int count)
+{
+    openPort();
+
+    uint8_t request[MODBUS_RTU_REQUEST_LEN];
+    uint8_t reply[MODBUS_RTU_READ_REPLY_MAX];
+    uint8_t exc = 0;
+
+    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, (uint16_t)reg, (uint16_t)count);
+    Serial2.write(request, reqLen);
+    Serial2.flush();
+
+    size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+    modbus_rtu::ReadReply rr = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
+
+    int values[32] = {0};
+    int n = 0;
+    bool ok = false;
+    int err = 0;
+    String hex;
+    hex.reserve(32 * 5);
+
+    if (rr == modbus_rtu::REPLY_OK)
+    {
+        int byteCount = reply[2];
+        n = byteCount / 2;
+        if (n > count) n = count;
+        if (n > MODBUS_READ_COUNT_MAX) n = MODBUS_READ_COUNT_MAX;
+        char word[8];
+        for (int i = 0; i < n; i++)
+        {
+            values[i] = ((int)reply[3 + 2 * i] << 8) | (int)reply[4 + 2 * i];
+            snprintf(word, sizeof(word), "%04X", values[i]);
+            if (i)
+            {
+                hex += ' ';
+            }
+            hex += word;
+        }
+        ok = true;
+    }
+    else
+    {
+        err = exc;
+    }
+
+    update([&](ModbusProbeState &s)
+           {
+        s.rreg = reg;
+        s.rcount = count;
+        s.rok = ok;
+        s.rn = n;
+        for (int i = 0; i < n; i++)
+        {
+            s.rvals[i] = values[i];
+        }
+        s.rhex = hex;
+        s.rerr = err;
+        if (ok)
+        {
+            char head[48];
+            snprintf(head, sizeof(head), "read %d reg @0x%04X", n, reg);
+            s.msg = head;
+        }
+        else
+        {
+            s.msg = String("read failed: ") + resultText(rr, err);
+        }
+        return StateUpdateResult::CHANGED; },
+           MODBUS_PROBE_ORIGIN);
+}
+
+// Write the two torque-limit registers with function 6, then always read both
+// back. The values arrived already validated and inside [100, 3000]; this
+// function cannot be reached with anything else.
+void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
+{
+    openPort();
+
+    uint8_t request[MODBUS_RTU_REQUEST_LEN];
+    uint8_t reply[16];
+    uint8_t exc = 0;
+
+    // --- forward, 0x01FE ---
+    uint8_t reqLen = modbus_rtu::buildWriteRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_FORWARD, (uint16_t)forwardRaw);
+    Serial2.write(request, reqLen);
+    Serial2.flush();
+    size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+    modbus_rtu::ReadReply rrF = modbus_rtu::checkWriteReply(reply, got, MODBUS_PROBE_UNIT,
+                                                            MODBUS_TORQUE_REG_FORWARD, (uint16_t)forwardRaw, &exc);
+
+    // --- reverse, 0x01FF ---
+    exc = 0;
+    reqLen = modbus_rtu::buildWriteRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_REVERSE, (uint16_t)reverseRaw);
+    Serial2.write(request, reqLen);
+    Serial2.flush();
+    got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+    modbus_rtu::ReadReply rrR = modbus_rtu::checkWriteReply(reply, got, MODBUS_PROBE_UNIT,
+                                                            MODBUS_TORQUE_REG_REVERSE, (uint16_t)reverseRaw, &exc);
+
+    // --- read both back, whatever the writes answered ---
+    int fread = -1;
+    int rread = -1;
+    exc = 0;
+    reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_FORWARD, 2);
+    Serial2.write(request, reqLen);
+    Serial2.flush();
+    got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+    modbus_rtu::ReadReply rrBack = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
+    if (rrBack == modbus_rtu::REPLY_OK)
+    {
+        fread = ((int)reply[3] << 8) | (int)reply[4];
+        rread = ((int)reply[5] << 8) | (int)reply[6];
+    }
+
+    bool wrote = (rrF == modbus_rtu::REPLY_OK) && (rrR == modbus_rtu::REPLY_OK);
+    bool readbackOk = (rrBack == modbus_rtu::REPLY_OK);
+
+    update([&](ModbusProbeState &s)
+           {
+        s.tfreq = forwardRaw;
+        s.trreq = reverseRaw;
+        s.tfread = fread;
+        s.trread = rread;
+        s.twrote = wrote;
+        s.tok = readbackOk;
+        if (readbackOk)
+        {
+            char head[56];
+            snprintf(head, sizeof(head), "torque now %d/%d", fread, rread);
+            s.msg = head;
+        }
+        else
+        {
+            s.msg = wrote ? String("torque written, read-back failed") : String("torque write failed");
+        }
+        return StateUpdateResult::CHANGED; },
+           MODBUS_PROBE_ORIGIN);
+}
+
+// Poll the drive's own encoder position and compare it against the firmware's
+// step count. Both are integer counts: the difference is the lost steps nothing
+// else in this project can see. All arithmetic is integer; no float formatting.
+void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm)
+{
+    openPort();
+
+    uint8_t request[MODBUS_RTU_REQUEST_LEN];
+    uint8_t reply[16];
+    uint8_t exc = 0;
+
+    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, (uint16_t)positionRegister, 1);
+    Serial2.write(request, reqLen);
+    Serial2.flush();
+
+    size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+    // Sample the firmware's step count as close to the reply as possible.
+    int32_t fwSteps = modbusFirmwareSteps;
+    modbus_rtu::ReadReply rr = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
+
+    bool ok = (rr == modbus_rtu::REPLY_OK);
+    int32_t drive = ok ? (((int32_t)reply[3] << 8) | (int32_t)reply[4]) : -1;
+
+    int32_t stepsPerMmX1000 = modbusFirmwareStepsPerMmX1000;
+    if (stepsPerMmX1000 < 1)
+    {
+        stepsPerMmX1000 = 1;
+    }
+
+    // milli-mm = steps * 1000 / (stepsPerMmX1000 / 1000) = steps * 1e6 / spmX1000
+    int fwMmMilli = (int)(((int64_t)fwSteps * 1000000) / stepsPerMmX1000);
+    int travelledMilli = 0;
+    int expected = 0;
+    int actual = 0;
+    int lost = 0;
+    int lostMmMilli = 0;
+
+    if (ok && !_posRefValid)
+    {
+        // A new poll cycle starts: this drive reading and the firmware step
+        // count at this instant become the reference everything is measured
+        // against until a re-baseline or a settings change.
+        _posRefValid = true;
+        _posRefSteps = fwSteps;
+        _posRefDrive = drive;
+    }
+
+    if (ok && _posRefValid)
+    {
+        int32_t stepsSinceRef = fwSteps - _posRefSteps;
+        travelledMilli = (int)(((int64_t)stepsSinceRef * 1000000) / stepsPerMmX1000);
+        expected = (int)(((int64_t)travelledMilli * countsPerMm) / 1000);
+        actual = (int)(drive - _posRefDrive);
+        lost = expected - actual;
+        if (countsPerMm != 0)
+        {
+            lostMmMilli = (int)(((int64_t)lost * 1000) / countsPerMm);
+        }
+    }
+
+    update([&](ModbusProbeState &s)
+           {
+        s.mbok = ok;
+        s.mbReg = ok ? (int)drive : -1;
+        s.mbFwMmMilli = fwMmMilli;
+        s.mbTravelledMilli = travelledMilli;
+        s.mbExpected = expected;
+        s.mbActual = actual;
+        s.mbLost = lost;
+        s.mbLostMmMilli = lostMmMilli;
         return StateUpdateResult::CHANGED; },
            MODBUS_PROBE_ORIGIN);
 }

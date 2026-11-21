@@ -29,7 +29,7 @@
 #define STROKE_SETTINGS_FILE_PATH "/config/strokeSettings.json"
 
 #ifndef OSSM_STEP_PER_MM
-#define OSSM_STEP_PER_MM 78.64f
+#define OSSM_STEP_PER_MM 84.88f
 #endif
 #ifndef OSSM_MAX_SPEED_MM_S
 #define OSSM_MAX_SPEED_MM_S 300.0f
