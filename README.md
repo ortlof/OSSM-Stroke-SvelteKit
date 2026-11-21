@@ -32,9 +32,21 @@ Node.js for the front end. The front end build runs automatically.
 pio run -e esp32dev              # OSSM reference board, ESP32, 4 MB flash
 pio run -e esp32-s3-devkitc-1    # recommended: ESP32-S3, 8 MB flash
 pio run -e esp32dev -t upload    # flash over USB
-pio run -e esp32dev-ota -t upload --upload-port <ip>   # OTA over espota
 pio run -e esp32dev -t erase     # one-time wipe when coming from the EEPROM firmware
 ```
+
+### Update over the network
+
+This firmware contains no espota/ArduinoOTA, so an update goes through the
+device itself, the same way the browser does it on the System -> Update page:
+
+```sh
+scripts/ota-upload.py --device <ip> build/release/OSSM-Stroke_esp32dev_0-7-0.bin
+scripts/ota-upload.py --device <ip> --check     # login and report the running build only
+```
+
+The device writes the image to the next OTA partition and reboots. Upload
+progress is printed from the `otastatus` WebSocket event.
 
 Flash usage measured for this seed: `esp32dev` 96.6 % of a 1,875 KiB app slot
 (66 kB head room), `esp32-s3-devkitc-1` 55.7 % of a 3.19 MiB app slot. An 8 MB
