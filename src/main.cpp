@@ -103,6 +103,7 @@ static const char *servoStateName(ServoState state);
 static void homingNotification(bool isHomed);
 static void telemetryCallback(float positionMm, float speedMmPerSecond, bool clipping);
 static void loadSettings();
+static void applyMotionTuning();
 static void startHoming();
 static void applyStrokeStateToEngine(const String &originId);
 void syncStrokeStateTask(void *pvParameters);
@@ -204,6 +205,23 @@ static void loadSettings()
         return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
 
 
+}
+
+// ---------------------------------------------------------------------------
+// Motion tuning: engine setters that must be applied AFTER begin(), because
+// begin() resets them to the compiled defaults. Safe to call again at runtime,
+// so a settings change takes effect without a restart.
+// ---------------------------------------------------------------------------
+
+static void applyMotionTuning()
+{
+    StrokeSettings settings;
+    strokeSettingsService.read([&settings](StrokeSettings &s)
+                               { settings = s; });
+
+    Stroker.setReversalAccelerationFactor(settings.reversal_acceleration_factor);
+    Stroker.setMaxAcceleration(settings.max_acceleration);
+    userSpeedLimit = min(settings.user_speed_limit, settings.max_speed);
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +535,12 @@ void setup()
     // Motion config must be known before the driver is created
     Stroker.begin(&strokingMachine, &servoMotor, &stepperDriver);
     Stroker.registerTelemetryCallback(telemetryCallback);
+    applyMotionTuning();  // after begin(): it resets the factors to the defaults
+
+    // A change to the machine settings applies the tuning immediately.
+    strokeSettingsService.addUpdateHandler([&](const String &originId)
+                                           { applyMotionTuning(); },
+                                           false);
 
     // Command applier: runs on every state change that a client caused
     strokeStateService.addUpdateHandler([&](const String &originId)

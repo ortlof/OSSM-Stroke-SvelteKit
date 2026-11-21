@@ -54,6 +54,12 @@ public:
     bool invert_direction = true;
     bool sensorless_homing = true;  // true: current sensing, false: end stop switch
 
+    // How much of max_acceleration a direction change may use. A geared rack and
+    // pinion with backlash slams its gear train at a full acceleration reversal,
+    // and on a stroking machine every move reverses, so this factor decides both
+    // the noise and the peak speed a short stroke can reach.
+    float reversal_acceleration_factor = 0.35;  // 0.05 .. 1.0
+
     static void read(StrokeSettings &settings, JsonObject &root)
     {
         root["physical_travel"] = settings.physical_travel;
@@ -64,6 +70,7 @@ public:
         root["user_speed_limit"] = settings.user_speed_limit;
         root["invert_direction"] = settings.invert_direction;
         root["sensorless_homing"] = settings.sensorless_homing;
+        root["reversal_acceleration_factor"] = settings.reversal_acceleration_factor;
     }
 
     static StateUpdateResult update(JsonObject &root, StrokeSettings &settings, const String &originId)
@@ -76,13 +83,16 @@ public:
         float user_speed_limit = root["user_speed_limit"] | settings.user_speed_limit;
         bool invert_direction = root["invert_direction"] | settings.invert_direction;
         bool sensorless_homing = root["sensorless_homing"] | settings.sensorless_homing;
+        float reversal = root["reversal_acceleration_factor"] | settings.reversal_acceleration_factor;
+        reversal = constrain(reversal, 0.05f, 1.0f);
 
         if (physical_travel == settings.physical_travel && keepout == settings.keepout &&
             steps_per_mm == settings.steps_per_mm && max_speed == settings.max_speed &&
             max_acceleration == settings.max_acceleration &&
             user_speed_limit == settings.user_speed_limit &&
             invert_direction == settings.invert_direction &&
-            sensorless_homing == settings.sensorless_homing)
+            sensorless_homing == settings.sensorless_homing &&
+            reversal == settings.reversal_acceleration_factor)
         {
             return StateUpdateResult::UNCHANGED;
         }
@@ -95,6 +105,7 @@ public:
         settings.user_speed_limit = user_speed_limit;
         settings.invert_direction = invert_direction;
         settings.sensorless_homing = sensorless_homing;
+        settings.reversal_acceleration_factor = reversal;
         return StateUpdateResult::CHANGED;
     }
 };
