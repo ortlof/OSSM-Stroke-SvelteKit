@@ -8,9 +8,12 @@
 //! the screen (a VR controller, a laser pointer, a hand on a touch panel):
 //!
 //!   - one full-width Start/Stop button, 54 px tall
-//!   - three tall vertical sliders, each about a third of the width
+//!   - four tall vertical sliders (Speed, Depth, Stroke, Sensation), each a
+//!     quarter of the width
 //!   - the value is printed inside the slider thumb, so no readout row is needed
 //!   - one small status dot, no status text
+//!   - one slim bottom row: a compact pattern selector and a small square
+//!     depth-setup button, both kept small and clear of Start/Stop
 //!
 //! Vertical rather than horizontal because a vertical target can be made tall and
 //! fat without widening the window, and because a hand that is not resting on
@@ -65,6 +68,25 @@ fn stop_fill() -> Color32 {
 fn disabled_fill() -> Color32 {
     Color32::from_rgba_unmultiplied(72, 74, 86, 110)
 }
+// The compact selectors in the bottom row: translucent so the desktop keeps
+// showing through, like every other surface in this panel.
+fn combo_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(38, 42, 54, 175)
+}
+fn combo_hot() -> Color32 {
+    Color32::from_rgba_unmultiplied(58, 64, 82, 205)
+}
+// Depth-setup mode is amber, deliberately neither the Start green nor the Stop
+// red, so the small button can never be read as Start/Stop.
+fn setup_on_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(206, 150, 46, 225)
+}
+fn setup_off_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(70, 74, 90, 160)
+}
+fn glyph_c() -> Color32 {
+    Color32::from_rgba_unmultiplied(245, 247, 252, 240)
+}
 
 const OK: Color32 = Color32::from_rgb(120, 220, 140);
 const WARN: Color32 = Color32::from_rgb(240, 200, 90);
@@ -73,6 +95,12 @@ const ERR: Color32 = Color32::from_rgb(240, 110, 110);
 const BUTTON_H: f32 = 54.0;
 const THUMB_H: f32 = 34.0;
 const GAP: f32 = 10.0;
+/// Height of the slim bottom row. Also reserved by `sliders_row` so the row can
+/// never push the sliders off the bottom of the panel.
+const COMBO_ROW_H: f32 = 34.0;
+/// The depth-setup button is deliberately small: it is a mode toggle, not a
+/// second Start/Stop.
+const SETUP_SIZE: f32 = 32.0;
 
 pub struct OverlayApp {
     worker: Worker,
@@ -86,6 +114,12 @@ pub struct OverlayApp {
     depth_active: bool,
     stroke: f32,
     stroke_active: bool,
+    /// Sensation is bipolar: -100 .. 100, step 5.
+    sensation: f32,
+    sensation_active: bool,
+    /// The selected pattern index, mirrored from `state.pattern`. The combo shows
+    /// `pattern_name` from the device; this is only the local selection.
+    pattern: i32,
 
     seeded: bool,
     last_send: Instant,
@@ -118,6 +152,9 @@ impl OverlayApp {
             depth_active: false,
             stroke: 30.0,
             stroke_active: false,
+            sensation: 0.0,
+            sensation_active: false,
+            pattern: 0,
             seeded: false,
             last_send: Instant::now()
                 .checked_sub(Duration::from_secs(10))
@@ -146,6 +183,8 @@ impl OverlayApp {
             self.speed = s.speed;
             self.depth = s.depth;
             self.stroke = s.stroke;
+            self.sensation = s.sensation;
+            self.pattern = s.pattern;
             self.seeded = true;
         }
     }
@@ -173,6 +212,12 @@ impl OverlayApp {
         if !self.stroke_active {
             self.stroke = s.stroke;
         }
+        if !self.sensation_active {
+            self.sensation = s.sensation;
+        }
+        // The combo has no drag state: the in-flight guard above is what stops a
+        // just-chosen pattern from snapping back to the old device echo.
+        self.pattern = s.pattern;
     }
 
     /// A second process can flip `click_through` in the config file; pick it up.
@@ -307,8 +352,10 @@ impl OverlayApp {
         // so a stroke can never be as long as the depth.
         let stroke_max = (self.depth - margin).clamp(5.0, travel);
 
-        let h = (ui.available_height() - 22.0).max(70.0);
-        let w = ((ui.available_width() - GAP * 2.0) / 3.0).floor().max(48.0);
+        // Reserve the label row above the sliders and the slim selector row
+        // below, so the sliders can never push that row off the panel.
+        let h = (ui.available_height() - 22.0 - COMBO_ROW_H - GAP).max(70.0);
+        let w = ((ui.available_width() - GAP * 3.0) / 4.0).floor().max(48.0);
 
         let mut patch = serde_json::Map::new();
         ui.horizontal(|ui| {
@@ -322,9 +369,126 @@ impl OverlayApp {
             if v_slider(ui, &mut self.stroke, &mut self.stroke_active, 0.0, stroke_max, 5.0, "STROKE", w, h) {
                 patch.insert("stroke".into(), serde_json::Value::from(self.stroke));
             }
+            // Sensation is bipolar (-100 .. 100). Same widget, same style: the
+            // thumb sits mid-rail at zero and the fill grows downward from it.
+            if v_slider(ui, &mut self.sensation, &mut self.sensation_active, -100.0, 100.0, 5.0, "SENSATION", w, h) {
+                patch.insert("sensation".into(), serde_json::Value::from(self.sensation));
+            }
         });
         if !patch.is_empty() {
             self.send_state(serde_json::Value::Object(patch));
+        }
+    }
+
+    /// The slim bottom row: a compact pattern selector on the left and, at the
+    /// far end, the small square depth-setup button. Both are kept small and
+    /// clear of the full-width Start/Stop button so they cannot be confused
+    /// with it.
+    fn controls_row(&mut self, ui: &mut egui::Ui) {
+        // While a command is in flight, show the pattern we just chose instead of
+        // the device's previous echo, or the combo flickers back for a frame.
+        let in_flight = self.last_send.elapsed() < Duration::from_millis(600);
+        let device_name = self.snapshot.state.pattern_name.clone();
+        let selected = if !in_flight && !device_name.is_empty() {
+            device_name
+        } else {
+            pattern_name(self.pattern).to_owned()
+        };
+
+        let mut chosen = self.pattern;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            ui.spacing_mut().interact_size.y = COMBO_ROW_H - 8.0;
+            // Small font and a translucent fill: it is a selector, not a feature.
+            ui.style_mut()
+                .text_styles
+                .insert(egui::TextStyle::Button, FontId::proportional(13.0));
+            let visuals = ui.visuals_mut();
+            visuals.widgets.inactive.weak_bg_fill = combo_fill();
+            visuals.widgets.hovered.weak_bg_fill = combo_hot();
+            visuals.widgets.active.weak_bg_fill = combo_hot();
+            visuals.window_fill = Color32::from_rgba_unmultiplied(16, 18, 24, 246);
+
+            label_pill(ui, "PATTERN", 12.5);
+
+            // The square button goes at the end of the row; give the combo the
+            // rest and never let it overlap the button.
+            let combo_w = (ui.available_width() - SETUP_SIZE - GAP).max(60.0);
+            egui::ComboBox::from_id_salt("pattern")
+                .width(combo_w)
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for (i, name) in crate::api::FALLBACK_PATTERNS.iter().enumerate() {
+                        ui.selectable_value(&mut chosen, i as i32, *name);
+                    }
+                });
+
+            self.setup_button(ui);
+        });
+
+        if chosen != self.pattern {
+            self.pattern = chosen;
+            self.send_state(serde_json::json!({ "pattern": self.pattern }));
+        }
+    }
+
+    /// A small square button that enters and leaves the firmware's interactive
+    /// depth-setup mode (`{"setup": 1}` / `{"setup": 0}`). In that mode the
+    /// machine creeps to the depth position at 10 mm/s and holds, so this button
+    /// *does* move the machine; the tooltip says so. It lights up amber while
+    /// `state.setup != 0`, and it is a glyph rather than a word so it stays
+    /// small and can never be read as Start/Stop.
+    fn setup_button(&mut self, ui: &mut egui::Ui) {
+        let connected = self.snapshot.connected;
+        let active = self.snapshot.state.setup != 0;
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(SETUP_SIZE, SETUP_SIZE), Sense::click());
+
+        let fill = if active {
+            setup_on_fill()
+        } else if connected {
+            setup_off_fill()
+        } else {
+            disabled_fill()
+        };
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(9), fill);
+        if resp.hovered() && connected {
+            painter.rect_filled(rect, CornerRadius::same(9), Color32::from_white_alpha(26));
+        }
+
+        // A crosshair, drawn by hand: the crate bundles no icon font, so a text
+        // glyph like U+2316 could render as a blank box. Drawing it is safe.
+        let c = rect.center();
+        let r = SETUP_SIZE * 0.26;
+        let arm = r + 4.0;
+        let col = glyph_c();
+        painter.circle_stroke(c, r, egui::Stroke::new(1.6, col));
+        painter.line_segment(
+            [egui::pos2(c.x - arm, c.y), egui::pos2(c.x + arm, c.y)],
+            egui::Stroke::new(1.6, col),
+        );
+        painter.line_segment(
+            [egui::pos2(c.x, c.y - arm), egui::pos2(c.x, c.y + arm)],
+            egui::Stroke::new(1.6, col),
+        );
+        painter.circle_filled(c, 1.8, col);
+
+        if resp.clicked() && connected {
+            self.send_state(serde_json::json!({ "setup": if active { 0 } else { 1 } }));
+        }
+        if resp.hovered() {
+            let hint = if !connected {
+                "depth setup: no connection to the machine"
+            } else if active {
+                "Depth setup: ON. The machine is creeping to the depth position and \
+                 holding there. Press to stop and release it."
+            } else {
+                "Set depth: the machine moves - it creeps to the current depth \
+                 position at 10 mm/s and holds there so you can look at it. Press \
+                 again to stop. This is not Start/Stop."
+            };
+            resp.on_hover_text(hint);
         }
     }
 }
@@ -355,6 +519,8 @@ impl eframe::App for OverlayApp {
             self.big_button(ui);
             ui.add_space(8.0);
             self.sliders_row(ui);
+            ui.add_space(8.0);
+            self.controls_row(ui);
         });
 
         // Keep the status dot and the values alive while the pointer is idle.
@@ -456,6 +622,38 @@ fn v_slider(
         }
     });
     sent
+}
+
+/// The firmware pattern name for an index, or a neutral placeholder when the
+/// device reports an index the compiled firmware does not have.
+fn pattern_name(index: i32) -> &'static str {
+    if index >= 0 {
+        crate::api::FALLBACK_PATTERNS
+            .get(index as usize)
+            .copied()
+            .unwrap_or("Pattern")
+    } else {
+        "Pattern"
+    }
+}
+
+/// A small text label on a dark translucent pill, matching the slider labels.
+/// Returns the width it consumed, for callers that lay out around it.
+fn label_pill(ui: &mut egui::Ui, text: &str, size: f32) -> f32 {
+    let galley =
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), FontId::proportional(size), label_c());
+    let w = galley.size().x + 14.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 20.0), Sense::hover());
+    let pill = Rect::from_center_size(rect.center(), galley.size() + egui::vec2(14.0, 6.0));
+    ui.painter().rect_filled(
+        pill,
+        CornerRadius::same(7),
+        Color32::from_rgba_unmultiplied(8, 10, 14, 150),
+    );
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, label_c());
+    w
 }
 
 /// Parse `"Ctrl+Shift+O"` into egui modifiers plus a key. Unknown key names fall

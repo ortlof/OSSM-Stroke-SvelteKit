@@ -19,14 +19,14 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-/// Pattern names the firmware ships with (`lib/StrokeEngine/src/pattern.h`),
-/// used until the WebSocket `strokePatterns` list arrives. Index == firmware
-/// pattern index. The commented-out patterns (Wave, Jack Hammer, Stroke
-/// Nibbler) are not compiled in.
-/// The firmware's pattern names, kept for reference and for a future
-/// pattern selector. Unused while the overlay only drives speed, depth and
-/// stroke.
-#[allow(dead_code)]
+/// Pattern names the firmware ships with, in firmware index order
+/// (`lib/StrokeEngine/src/pattern.h`, the `patternTable` array). Index == the
+/// value the firmware expects in `{"pattern": N}` and the value it reports in
+/// `state.pattern`. The patterns commented out there (Wave, Jack Hammer, Stroke
+/// Nibbler) are not compiled in, so they are not in this list either.
+///
+/// The list is fixed in firmware, so the overlay's pattern selector reads it
+/// straight from here; nothing is fetched.
 pub const FALLBACK_PATTERNS: &[&str] = &[
     "Simple Stroke",
     "Teasing or Pounding",

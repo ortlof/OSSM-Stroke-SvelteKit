@@ -14,11 +14,21 @@ cross build link with no mingw toolchain at all.
 
 ## What it shows
 
-* **Three vertical sliders** — Speed (capped at the slider limit from
-  `/rest/strokeSettings`), Depth, Stroke — and **one Start/Stop button**. That is
-  the whole control surface, on purpose: the overlay is aimed at a pointer that is
-  far from the screen (a VR controller, a laser pointer, a hand on a touch panel),
-  so every target is large and nothing else competes for attention.
+* **Four vertical sliders** — Speed (capped at the slider limit from
+  `/rest/strokeSettings`), Depth, Stroke and Sensation (`-100 .. 100`, step 5) —
+  and **one Start/Stop button**. The sliders and the button are the whole control
+  surface, and they are deliberately large: the overlay is aimed at a pointer that
+  is far from the screen (a VR controller, a laser pointer, a hand on a touch
+  panel), so every target is big and nothing else competes for attention.
+* **A compact pattern selector.** A small combo box in a slim row across the
+  bottom picks the stroke pattern (`{"pattern": N}`). It shows the device's
+  `pattern_name` and is small on purpose — it is a selector, not a feature.
+* **A small Set-Depth button.** A square button with a hand-drawn crosshair
+  glyph sits next to the pattern selector, well clear of Start/Stop, and toggles
+  the firmware's interactive depth-setup mode (`{"setup": 1}` / `{"setup": 0}`).
+  It lights up amber while `state.setup != 0`. Its tooltip says plainly that it
+  **moves the machine**: the machine creeps to the depth position at 10 mm/s and
+  holds there so the operator can look at it.
 * **The value lives in the handle.** The number is printed inside the slider
   handle, which removes the readout row the earlier design had.
 * **One status dot** inside the button: red = offline, yellow = connected but not
@@ -27,9 +37,9 @@ cross build link with no mingw toolchain at all.
   widening the window, and a hand that is not resting on anything moves up and
   down more predictably than sideways.
 
-Everything from the earlier design that is not needed at arm's length — pattern
-selector, sensation, keep-stroke-start, the tuning section, the readout row — now
-lives only in the browser page, which is the better place for it.
+Everything from the earlier design that is not needed at arm's length —
+keep-stroke-start, the tuning section, the readout row — still lives only in the
+browser page, which is the better place for it.
 
 Every command is a `POST /rest/strokeState` with a subset body. The firmware
 clamps what it receives (speed to the slider limit, depth to usable travel minus
@@ -54,8 +64,10 @@ ones.
   command is sent, the widget keeps its own value instead of snapping back to the
   device echo.
 * The pattern list is the firmware's fixed list
-  (`lib/StrokeEngine/src/pattern.h`): Simple Stroke, Teasing or Pounding,
-  Robo Stroke, Half'n'Half, Deeper, Stop'n'Go, Insist, Knot.
+  (`lib/StrokeEngine/src/pattern.h`, the `patternTable` array), in firmware index
+  order: Simple Stroke, Teasing or Pounding, Robo Stroke, Half'n'Half, Deeper,
+  Stop'n'Go, Insist, Knot. The pattern selector's combo is built from it, and the
+  index it POSTs is the firmware's own index.
 
 ## Configuration
 
@@ -71,8 +83,8 @@ poll_hz = 8.0
 settings_poll_secs = 2.0
 click_through = false
 click_through_shortcut = "Ctrl+Shift+O"
-window_width = 340.0
-window_height = 320.0
+window_width = 430.0
+window_height = 330.0
 
 # How opaque the panel is: 0 is invisible, 255 is solid.
 # Lower it for VR, raise it if the text fights a bright video behind it.
@@ -161,8 +173,8 @@ machine.
 | Command | Result |
 | --- | --- |
 | `cargo check` | **passes**, no warnings |
-| `cargo build --release` | **passes** → `target/release/overlay-hud` (~9.3 MB, ELF x86-64) |
-| `cargo build --release --target x86_64-pc-windows-gnu` | **passes** → `target/x86_64-pc-windows-gnu/release/overlay-hud.exe` (~7.5 MB) |
+| `cargo build --release` | **passes** → `target/release/overlay-hud` (~8.8 MB, ELF x86-64) |
+| `cargo build --release --target x86_64-pc-windows-gnu` | **passes** → `target/x86_64-pc-windows-gnu/release/overlay-hud.exe` (~7.0 MB) |
 
 ```
 $ file target/x86_64-pc-windows-gnu/release/overlay-hud.exe

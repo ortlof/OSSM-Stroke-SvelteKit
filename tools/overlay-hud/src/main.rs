@@ -3,8 +3,8 @@
 //! A small, frameless, transparent, always-on-top control panel for the
 //! OSSM-Stroke machine. It polls the device REST API from a background thread
 //! and mirrors the controls of `interface/src/routes/stroke/Stroke.svelte`:
-//! Start/Stop, Home, Speed/Stroke/Depth/Pattern/Sensation, keep-stroke-start,
-//! the homing and connection indicators, and the live readout.
+//! Start/Stop, Speed/Depth/Stroke/Sensation sliders, a compact pattern selector
+//! and the small depth-setup button. It does not stream the event WebSocket.
 //!
 //! Usage:
 //!   overlay-hud                     run the overlay
