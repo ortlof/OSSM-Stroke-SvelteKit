@@ -242,6 +242,12 @@ void ModbusProbeService::probeLoop()
             _posRefValid = false;
         }
 
+        if (modbusParamWritePending)
+        {
+            modbusParamWritePending = false;
+            runParamWrite((int)modbusParamWriteReg, (int)modbusParamWriteValue);
+        }
+
         // Plain non-blocking loop: never sit on the UART or the state lock.
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
@@ -543,6 +549,61 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
 // step count. Both are integer counts: the difference is the lost steps nothing
 // else in this project can see. All arithmetic is integer; no float formatting.
 volatile bool modbusProbeInvert = true;
+volatile bool modbusParamWritePending = false;
+volatile int32_t modbusParamWriteReg = 0;
+volatile int32_t modbusParamWriteValue = 0;
+
+void ModbusProbeService::runParamWrite(int reg, int value)
+{
+    openPort();
+
+    uint8_t request[MODBUS_RTU_REQUEST_LEN];
+    uint8_t reply[16];
+    uint8_t exc = 0;
+
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
+    uint8_t reqLen = modbus_rtu::buildWriteRequest(request, MODBUS_PROBE_UNIT, (uint16_t)reg, (uint16_t)value);
+    Serial2.write(request, reqLen);
+    Serial2.flush();
+    size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+    modbus_rtu::ReadReply wr = modbus_rtu::checkWriteReply(reply, got, MODBUS_PROBE_UNIT,
+                                                         (uint16_t)reg, (uint16_t)value, &exc);
+
+    int readback = -1;
+    if (wr == modbus_rtu::REPLY_OK)
+    {
+        // A parameter write that is refused, or silently clamped, must not be
+        // reported as success. Read it straight back.
+        while (Serial2.available())
+        {
+            Serial2.read();
+        }
+        exc = 0;
+        reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, (uint16_t)reg, 1);
+        Serial2.write(request, reqLen);
+        Serial2.flush();
+        got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+        modbus_rtu::ReadReply rr = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
+        if (rr == modbus_rtu::REPLY_OK)
+        {
+            readback = (int)(uint16_t)(((uint16_t)reply[3] << 8) | reply[4]);
+        }
+    }
+
+    bool ok = (readback == value);
+    update([&](ModbusProbeState &s)
+           {
+        s.pwReg = reg;
+        s.pwVal = value;
+        s.pwReadback = readback;
+        s.pwOk = ok;
+        s.msg = ok ? "parameter write confirmed" : "parameter write failed";
+        return StateUpdateResult::CHANGED; },
+           MODBUS_PROBE_ORIGIN);
+}
 
 void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm, bool invert)
 {

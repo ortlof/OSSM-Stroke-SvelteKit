@@ -74,6 +74,9 @@
 // monitor can stay in integer arithmetic. Owned by main.cpp (the motion side);
 // read here as plain aligned 32-bit values, so no lock is needed.
 extern volatile bool modbusProbeInvert;   // mirror of mbInvert, for the poll task
+extern volatile bool modbusParamWritePending;
+extern volatile int32_t modbusParamWriteReg;
+extern volatile int32_t modbusParamWriteValue;
 extern volatile int32_t modbusFirmwareSteps;
 
 extern volatile int32_t modbusFirmwareStepsPerMmX1000;
@@ -132,6 +135,10 @@ public:
 
     // --- position monitor result ---
     bool mbok = false;         // the last poll got a valid drive position
+    int pwReg = -1;            // parameter register the operator asked to write
+    int pwVal = 0;             // the value asked for
+    int pwReadback = -1;       // what the drive actually holds afterwards
+    bool pwOk = false;         // the write was accepted AND read back equal
     int mbReg = -1;            // raw drive register value, -1 if unknown
     int mbFwMmMilli = 0;       // firmware position in milli-mm
     int mbTravelledMilli = 0;  // mm travelled since the reference, milli-mm
@@ -184,6 +191,10 @@ public:
         root["mb_enabled"] = state.mbEnabled;
         root["mb_poll_ms"] = state.mbPollMs;
         root["mb_ok"] = state.mbok;
+        root["param_write_reg"] = state.pwReg;
+        root["param_write_value"] = state.pwVal;
+        root["param_write_readback"] = state.pwReadback;
+        root["param_write_ok"] = state.pwOk;
         root["mb_reg_value"] = state.mbReg;
         root["mb_fw_mm_milli"] = state.mbFwMmMilli;
         root["mb_travelled_mm_milli"] = state.mbTravelledMilli;
@@ -288,6 +299,35 @@ public:
             }
         }
 
+        // --- narrow parameter write: one register, range-checked, read back ---
+        if (!root["param_write_reg"].isNull() && !root["param_write_value"].isNull())
+        {
+            int preg = root["param_write_reg"] | -1;
+            int pval = root["param_write_value"] | -1;
+            if (preg < 0x0000 || preg > 0x07FF)
+            {
+                // Parameter space only. The monitor block at 0x0800 and above is
+                // deliberately unreachable through this endpoint.
+                state.pwOk = false;
+                state.msg = "parameter write rejected: address must be 0x0000..0x07FF";
+            }
+            else if (pval < 0 || pval > 65535)
+            {
+                state.pwOk = false;
+                state.msg = "parameter write rejected: value must be 0..65535";
+            }
+            else
+            {
+                modbusParamWriteReg = preg;
+                modbusParamWriteValue = pval;
+                state.pwReg = preg;
+                state.pwVal = pval;
+                modbusParamWritePending = true;
+                state.msg = "parameter write queued";
+            }
+            changed = true;
+        }
+
         // --- position monitor re-baseline ---
         if (root["mb_rebaseline"] | false)
         {
@@ -338,6 +378,7 @@ private:
     void runRangeRead(int reg, int count);
     void runTorqueWrite(int forwardRaw, int reverseRaw);
     void runPositionPoll(int positionRegister, int countsPerMm, bool invert);
+    void runParamWrite(int reg, int value);
     void openPort();
 
     HttpEndpoint<ModbusProbeState> _httpEndpoint;
