@@ -1,0 +1,184 @@
+# overlay-hud — OSSM-Stroke desktop overlay
+
+A small, frameless, transparent, always-on-top control panel for the
+OSSM-Stroke machine, written in Rust. It is meant to sit over a video or a VR
+window while the machine runs, and it exposes the same controls as the web UI at
+`interface/src/routes/stroke/Stroke.svelte`.
+
+Built with [`eframe`/`egui`](https://github.com/emilk/egui) 0.37 on the `glow`
+(OpenGL) renderer. There is **no C dependency** anywhere (no TLS crate, no
+OpenSSL): the device is spoken to over plain HTTP by a small hand-rolled client,
+and the Windows specifics go through the pure-Rust bindings `egui` already pulls
+in. That keeps the dependency tree small and — as it turns out — lets the GNU
+cross build link with no mingw toolchain at all.
+
+## What it shows
+
+* **Controls** — Start / Stop, Home, Speed (capped at the slider limit from
+  `/rest/strokeSettings`), Depth, Stroke, Pattern selector, Sensation (−100..100),
+  Keep-stroke-start, and a *Tuning and limits* section (speed limit, home margin,
+  reversal acceleration factor) that is collapsed by default.
+* **Indicators** — connection (online/offline) and homing (`servo_state` plus
+  `homed`), in the title strip.
+* **Readout** — position, `speed_measured` of the requested speed, `servo_state`,
+  the pattern name, a **CLIPPING** warning, and the sweep range
+  (`sweep_start` → `depth` of the usable travel).
+
+Every command is a `POST /rest/strokeState` with a subset body. The firmware
+clamps what it receives (speed to the slider limit, depth to usable travel minus
+`far_margin`, stroke to depth minus `home_margin`) and returns the state **after**
+clamping; the overlay always displays those returned values, never the requested
+ones.
+
+## How it talks to the device
+
+* **REST polling, not the WebSocket.** This project has a load-bearing lesson: do
+  **not** stream `ws://…/ws/events` and make blocking HTTP calls from the same
+  thread. The device's sends back up, the HTTP request stalls for its whole
+  timeout, and it looks exactly like a firmware hang. So the overlay polls REST
+  from one dedicated thread and never opens the event socket. The useful poll
+  rate for the readout is 5–10 Hz (`poll_hz`, default 8).
+* The thread signs in once with `POST /rest/signIn` and sends
+  `Authorization: Bearer <jwt>` on every other call. A `401` clears the token and
+  the thread signs in again (until then it retries at 2 Hz so a missing machine
+  does not flood the network).
+* The UI thread never blocks: it pushes commands through a channel and drains
+  telemetry snapshots. While a slider is being dragged, or for 0.6 s after a
+  command is sent, the widget keeps its own value instead of snapping back to the
+  device echo.
+* The pattern list is the firmware's fixed list
+  (`lib/StrokeEngine/src/pattern.h`): Simple Stroke, Teasing or Pounding,
+  Robo Stroke, Half'n'Half, Deeper, Stop'n'Go, Insist, Knot.
+
+## Configuration
+
+Everything runs from a TOML file (`config.toml`, shipped with the defaults),
+never from hard-coded values. The credentials are the firmware's factory defaults
+and a known security issue — change them on the device and here.
+
+```toml
+device = "http://192.168.2.115"   # base URL, plain HTTP, no trailing slash
+username = "admin"
+password = "admin"
+poll_hz = 8.0
+settings_poll_secs = 2.0
+click_through = false
+click_through_shortcut = "Ctrl+Shift+O"
+window_width = 420.0
+window_height = 260.0
+```
+
+**Setting the device address.** Edit `device` in `config.toml`. The file is
+looked up in this order:
+
+1. `$OSSM_HUD_CONFIG` if set,
+2. `./config.toml` in the current directory,
+3. `config.toml` next to the executable.
+
+If none exist, the default config is written next to the executable, so a
+double-clicked binary finds its own file even though its working directory is
+somewhere else. On Windows, after the first run, edit `config.toml` in the same
+folder as `overlay-hud.exe`. A config file may list only the keys you want to
+change; any missing key falls back to its default.
+
+## Click-through
+
+Click-through makes the pointer pass through the panel to whatever is underneath.
+Toggle it back **off** one of two ways:
+
+* **Keyboard shortcut** (`click_through_shortcut`, default **`Ctrl+Shift+O`**) —
+  works while the overlay has keyboard focus.
+* **A second process flipping the config file** — this is the reliable path when
+  the overlay cannot take focus (you just clicked the video window). The overlay
+  re-reads `config.toml` about once a second and applies `click_through` from it,
+  so any of these work:
+
+  ```sh
+  overlay-hud --toggle-click-through        # flips the flag and exits
+  ```
+
+  ```powershell
+  # or write the file yourself from a Stream Deck / AutoHotkey script:
+  (Get-Content config.toml) -replace '^click_through = .*', 'click_through = false' | Set-Content config.toml
+  ```
+
+In click-through mode the title strip shows `click-through · Ctrl+Shift+O` so you
+can still see the escape hatch while the mouse is inert over the panel.
+
+## Build on Windows (MSVC toolchain)
+
+Prerequisite: the **MSVC** build tools (Visual Studio Build Tools with the
+"Desktop development with C++" workload) and the Rust MSVC toolchain.
+
+```powershell
+rustup default stable-x86_64-pc-windows-msvc
+cargo build --release
+# -> target\release\overlay-hud.exe
+```
+
+`eframe`/`winit`/`glutin` link against the system `opengl32`/`gdi32` through the
+`windows-sys` bindings; nothing beyond the MSVC toolchain is needed. Run
+`overlay-hud.exe` next to its `config.toml`.
+
+The binary is a console-subsystem executable, so `--probe`, `--help` and
+`--toggle-click-through` still print when it is run from a shell. A black console
+window must not sit behind an always-on-top panel, so the GUI start-up hides its
+own console (`GetConsoleWindow` + `ShowWindow(SW_HIDE)`) whenever it runs without
+a command-line flag. Double-click the exe and only the overlay appears; there is
+nothing to configure and no shortcut trick to remember.
+
+## Cross-compile from Linux (GNU target)
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+cargo build --release --target x86_64-pc-windows-gnu
+# -> target/x86_64-pc-windows-gnu/release/overlay-hud.exe
+```
+
+### Measured outcome (this machine)
+
+Tools: `cargo`/`rustc` 1.100.0, targets `x86_64-unknown-linux-gnu` and
+`x86_64-pc-windows-gnu` installed. No `x86_64-w64-mingw32-gcc` is present on this
+machine.
+
+| Command | Result |
+| --- | --- |
+| `cargo check` | **passes**, no warnings |
+| `cargo build --release` | **passes** → `target/release/overlay-hud` (~9.3 MB, ELF x86-64) |
+| `cargo build --release --target x86_64-pc-windows-gnu` | **passes** → `target/x86_64-pc-windows-gnu/release/overlay-hud.exe` (~7.5 MB) |
+
+```
+$ file target/x86_64-pc-windows-gnu/release/overlay-hud.exe
+target/x86_64-pc-windows-gnu/release/overlay-hud.exe: PE32+ executable for MS Windows 5.02 (console), x86-64 (stripped to external PDB), 9 sections
+```
+
+**The GNU cross build does not need mingw here.** Because the crate has no C
+dependency, the GNU target links with `rust-lld` (shipped with rustc) instead of
+`x86_64-w64-mingw32-gcc`. The common failure — missing mingw/OpenGL C headers —
+does not arise for this dependency set. If you later add a crate with C code
+(e.g. a TLS stack such as `ring`/`openssl-sys`), the GNU link will start asking
+for a `x86_64-w64-mingw32-*` toolchain and you will need `mingw-w64` installed;
+this crate avoids that on purpose.
+
+## Verifying without a display
+
+`overlay-hud --probe` signs in, prints the `/rest/strokeState` and
+`/rest/strokeSettings` payloads and a no-op command echo, then exits — a headless
+smoke test of the whole REST client (sign-in, Bearer auth, JSON, chunked and
+content-length responses, POST body). It was run against a local mock of the
+device and against the real machine on the network.
+
+## Layout
+
+| File | Content |
+| --- | --- |
+| `src/main.rs` | entry point, window options, `--probe` / `--toggle-click-through` |
+| `src/config.rs` | config load/save, path resolution, click-through flip |
+| `src/api.rs` | hand-rolled HTTP/1.1 client + `StrokeState` / `StrokeSettings` |
+| `src/worker.rs` | the REST polling thread |
+| `src/app.rs` | the egui overlay window |
+| `config.toml` | default config (device address, credentials, shortcut) |
+
+## Licence
+
+MIT OR Apache-2.0.

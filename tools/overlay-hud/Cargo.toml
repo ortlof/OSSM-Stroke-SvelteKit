@@ -1,0 +1,37 @@
+[package]
+name = "overlay-hud"
+version = "0.1.0"
+edition = "2021"
+description = "Transparent, always-on-top control overlay for the OSSM-Stroke machine"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "overlay-hud"
+path = "src/main.rs"
+
+[dependencies]
+# eframe re-exports egui; the app uses `eframe::egui` so the two cannot drift.
+# glow (OpenGL) rather than wgpu: a smaller dependency tree and a much easier
+# mingw cross build. default-features is off so wgpu/accesskit are not pulled in;
+# x11 + wayland keep the native Linux backends working.
+#
+# There is no C dependency anywhere in this tree (the device is spoken to over
+# plain HTTP by a hand-rolled client, and the Windows specifics go through the
+# pure-Rust bindings egui already pulls in). That is what lets
+# `--target x86_64-pc-windows-gnu` link with rust-lld and no mingw toolchain.
+eframe = { version = "0.37", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "x11",
+    "wayland",
+] }
+egui = "0.37"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true

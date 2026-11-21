@@ -1,0 +1,35 @@
+# Config for the OSSM-Stroke overlay HUD.
+#
+# The overlay reads this file at start-up and re-reads it about once a second to
+# pick up an external click-through toggle.
+#
+# Path resolution, in order: $OSSM_HUD_CONFIG, ./config.toml, then
+# <directory of the executable>/config.toml.
+
+# Base URL of the OSSM-Stroke device. Plain HTTP, no trailing slash.
+device = "http://192.168.2.115"
+
+# Framework login. These are the firmware's factory defaults and a known
+# security issue — change them on the device and here.
+username = "admin"
+password = "admin"
+
+# Telemetry poll rate in Hz. 5-10 is the useful range: the firmware's answer
+# rate is the limit, not the network.
+poll_hz = 8.0
+
+# How often the slider limits (/rest/strokeSettings) are re-read, in seconds.
+settings_poll_secs = 2.0
+
+# Start with the mouse click-through enabled (pointer passes through the panel).
+click_through = false
+
+# Keyboard shortcut that toggles click-through while the overlay has focus.
+# A second process can also flip `click_through` above: run
+#   overlay-hud --toggle-click-through
+# and the running overlay applies it within a second.
+click_through_shortcut = "Ctrl+Shift+O"
+
+# Initial window size in logical points.
+window_width = 420.0
+window_height = 260.0
