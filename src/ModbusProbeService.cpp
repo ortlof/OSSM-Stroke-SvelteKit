@@ -250,6 +250,12 @@ void ModbusProbeService::probeLoop()
             pollAlarm();
         }
 
+        if ((uint32_t)(millis() - _lastTorqueMs) >= 500U)
+        {
+            _lastTorqueMs = millis();
+            pollTorque();
+        }
+
         if (modbusParamWritePending)
         {
             modbusParamWritePending = false;
@@ -557,9 +563,53 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
 // step count. Both are integer counts: the difference is the lost steps nothing
 // else in this project can see. All arithmetic is integer; no float formatting.
 volatile bool modbusProbeInvert = true;
+
+// Consecutive polls where the firmware sent steps and the drive's counters did not
+// move. Three in a row means pulses are not arriving; at rest this cannot trigger.
+static int sStallCount = 0;
 volatile bool modbusParamWritePending = false;
 volatile int32_t modbusParamWriteReg = 0;
 volatile int32_t modbusParamWriteValue = 0;
+
+void ModbusProbeService::pollTorque()
+{
+    openPort();
+
+    uint8_t request[MODBUS_RTU_REQUEST_LEN];
+    uint8_t reply[16];
+    uint8_t exc = 0;
+
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
+    // d09..d13 are consecutive: command, feedback, average, peak, overload (0.1 %).
+    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, 0x0843, 5);
+    Serial2.write(request, reqLen);
+    Serial2.flush();
+    size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+    modbus_rtu::ReadReply rr = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
+    if (rr != modbus_rtu::REPLY_OK)
+    {
+        return;
+    }
+
+    int16_t v[5];
+    for (int i = 0; i < 5; i++)
+    {
+        v[i] = (int16_t)(((uint16_t)reply[3 + i * 2] << 8) | reply[4 + i * 2]);
+    }
+
+    update([&](ModbusProbeState &s)
+           {
+        s.tqCmd = v[0];
+        s.tqFb = v[1];
+        s.tqAvg = v[2];
+        s.tqPeak = v[3];
+        s.tqOverload = v[4];
+        return StateUpdateResult::CHANGED; },
+           MODBUS_PROBE_ORIGIN);
+}
 
 void ModbusProbeService::pollAlarm()
 {
@@ -701,6 +751,14 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm, 
     // comparison made mid-move measures the motion, not a fault. Two polls that
     // read identical values from both sources mean rest.
     bool atRest = _haveLast && (fwSteps == _lastFwSteps) && (drive == _lastDrive);
+    if (_haveLast && (fwSteps != _lastFwSteps) && (drive == _lastDrive))
+    {
+        if (sStallCount < 100) { sStallCount++; }
+    }
+    else if (fwSteps == _lastFwSteps)
+    {
+        sStallCount = 0;
+    }
     _lastFwSteps = fwSteps;
     _lastDrive = drive;
     _haveLast = ok;
@@ -735,6 +793,7 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm, 
     update([&](ModbusProbeState &s)
            {
         s.mbok = ok;
+        s.driveStalled = (sStallCount >= 3);
         s.mbReg = ok ? (int)drive : -1;
         s.mbSettled = atRest;
         s.mbFwMmMilli = fwMmMilli;

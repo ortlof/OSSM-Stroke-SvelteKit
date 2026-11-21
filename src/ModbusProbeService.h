@@ -142,6 +142,12 @@ public:
     // --- position monitor result ---
     bool mbok = false;         // the last poll got a valid drive position
     bool alarmKnown = false;   // false: the fault bit is NOT identified yet
+    int tqCmd = 0;             // d09 torque command, per mille of rating
+    int tqFb = 0;              // d10 torque feedback, per mille
+    int tqAvg = 0;             // d11 average torque
+    int tqPeak = 0;            // d12 peak torque
+    int tqOverload = 0;        // d13 overload load rate
+    bool driveStalled = false; // firmware is sending steps the drive is not taking
     int alarmWord = 0;         // raw Register25 value
     int pwReg = -1;            // parameter register the operator asked to write
     int pwVal = 0;             // the value asked for
@@ -202,6 +208,12 @@ public:
         // drive_alarm is deliberately absent: the fault bit in Register25 is not
         // identified. A boolean here would be a guess wearing a warning label.
         root["drive_alarm_known"] = state.alarmKnown;
+        root["torque_cmd_pct"] = state.tqCmd / 10.0f;
+        root["torque_fb_pct"] = state.tqFb / 10.0f;
+        root["torque_avg_pct"] = state.tqAvg / 10.0f;
+        root["torque_peak_pct"] = state.tqPeak / 10.0f;
+        root["overload_pct"] = state.tqOverload / 10.0f;
+        root["drive_stalled"] = state.driveStalled;
         root["drive_alarm_word"] = state.alarmWord;
         root["param_write_reg"] = state.pwReg;
         root["param_write_value"] = state.pwVal;
@@ -392,6 +404,7 @@ private:
     void runPositionPoll(int positionRegister, int countsPerMm, bool invert);
     void runParamWrite(int reg, int value);
     void pollAlarm();
+    void pollTorque();
     void openPort();
 
     HttpEndpoint<ModbusProbeState> _httpEndpoint;
@@ -405,6 +418,7 @@ private:
     bool _posRefValid = false;      // a reference has been taken this cycle
     int32_t _posRefSteps = 0;       // firmware step count at the reference
     uint32_t _lastAlarmMs = 0;      // alarm poll cadence
+    uint32_t _lastTorqueMs = 0;     // torque poll cadence
     int32_t _posRefDrive = 0;       // drive register value at the reference
     int32_t _lastFwSteps = 0;       // previous poll's step count, to detect rest
     int32_t _lastDrive = 0;         // previous poll's drive value
