@@ -546,10 +546,11 @@ impl eframe::App for OverlayApp {
         // Scaling zooms the whole UI, which changes content_rect, which changes the
         // zoom: without a dead band that is a feedback loop and the panel jitters.
         // Only rescale when the size has genuinely changed by more than 12 percent.
-        const DESIGN_W: f32 = 240.0;
+        const DESIGN_W: f32 = 320.0;
         let cur = ctx.zoom_factor();
         let win_w = ctx.content_rect().width().max(1.0) * cur;
-        let want_zoom = (win_w / DESIGN_W).clamp(0.6, 2.5);
+        // Shrink when the window is small, but never enlarge: 1.0 is the ceiling.
+        let want_zoom = (win_w / DESIGN_W).clamp(0.55, 1.0);
         if (cur - want_zoom).abs() > 0.12 * cur {
             ctx.set_zoom_factor(want_zoom);
         }
