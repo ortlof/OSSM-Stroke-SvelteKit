@@ -349,7 +349,8 @@ bool StrokeEngine::startPattern() {
             xTaskCreatePinnedToCore(
                 this->_strokingImpl,    // Function that should be called
                 "Stroking",             // Name of the task (for debugging)
-                4096,                   // Stack size (bytes)
+                6144,                   // Stack size (bytes). Head room for the pattern
+                                        // generator and application telemetry.
                 this,                   // Pass reference to this class instance
                 24,                     // Pretty high task priority
                 &_taskStrokingHandle,   // Task handle
@@ -587,7 +588,8 @@ void StrokeEngine::enableAndHome(endstopProperties *endstop, float speed) {
     xTaskCreatePinnedToCore(
         this->_homingProcedureImpl,     // Function that should be called
         "Homing",                       // Name of the task (for debugging)
-        2048,                           // Stack size (bytes)
+        6144,                           // Stack size (bytes). 2048 is not enough as soon as
+                                        // the application callback does real work.
         this,                           // Pass reference to this class instance
         20,                             // Pretty high task priority
         &_taskHomingHandle,             // Task handle
@@ -621,7 +623,8 @@ void StrokeEngine::enableAndSensorlessHome(sensorlessHomeProperties *sensorless,
     xTaskCreatePinnedToCore(
         this->_homingProcedureImpl,     // Function that should be called
         "SensorlessHoming",             // Name of the task (for debugging)
-        2048,                           // Stack size (bytes)
+        6144,                           // Stack size (bytes). 2048 overflowed the moment the
+                                        // callback formatted a float for the serial port.
         this,                           // Pass reference to this class instance
         20,                             // Pretty high task priority
         &_taskHomingHandle,             // Task handle

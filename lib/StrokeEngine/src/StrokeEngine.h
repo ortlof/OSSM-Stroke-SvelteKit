@@ -17,9 +17,13 @@
 
 // Debug Levels
 //#define DEBUG_TALKATIVE             // Show debug messages from the StrokeEngine on Serial
-#define DEBUG_STROKE                // Show debug messaged for each individual stroke on Serial
-#define DEBUG_CLIPPING              // Show debug messages when motions violating the machine 
+//#define DEBUG_STROKE                // Show debug messages for each individual stroke on Serial
+//#define DEBUG_CLIPPING              // Show debug messages when motions violating the machine
                                     // physics are commanded
+// DEBUG_STROKE and DEBUG_CLIPPING stay off: each of their messages builds String
+// objects with float formatting and then blocks on the serial port. Inside the
+// pattern task that costs stack and disturbs the step timing, which is exactly
+// what this fork tuned. Enable them only for a short debugging session.
 
 /**************************************************************************/
 /*!

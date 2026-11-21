@@ -122,26 +122,18 @@ static const char *servoStateName(ServoState state)
     }
 }
 
+// This callback runs inside the engine homing task, which owns a small stack.
+// Float formatting on the serial port goes through malloc, and a WebSocket push
+// serialises JSON: both need far more stack than a motion task has. Doing that
+// work here crashed the device with "Stack canary watchpoint triggered
+// (SensorlessHoming)". Record the result only and let the sync task report it.
+static volatile bool homingResultPending = false;
+static volatile bool homingResultSuccess = false;
+
 static void homingNotification(bool isHomed)
 {
-    if (isHomed)
-    {
-        // The engine measures the real travel while it homes.
-        strokingMachine.physicalTravel = Stroker.getPhysicalTravel();
-        Serial.printf("Homing done, physical travel: %.1f mm\n", strokingMachine.physicalTravel);
-        esp32sveltekit.getNotificationService()->pushNotification("Homed - ready to rumble", PUSHSUCCESS);
-    }
-    else
-    {
-        Serial.println("Homing failed");
-        esp32sveltekit.getNotificationService()->pushNotification("Homing failed", PUSHERROR);
-    }
-
-    strokeStateService.update([&](StrokeState &state)
-                              {
-        state.homed = isHomed;
-        state.physicalTravel = strokingMachine.physicalTravel;
-        return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
+    homingResultSuccess = isHomed;
+    homingResultPending = true;
 }
 
 static void telemetryCallback(float positionMm, float speedMmPerSecond, bool clipping)
@@ -283,6 +275,33 @@ void syncStrokeStateTask(void *pvParameters)
 
     for (;;)
     {
+        // Result of the homing procedure, reported by the engine homing task
+        if (homingResultPending)
+        {
+            bool success = homingResultSuccess;
+            homingResultPending = false;
+
+            if (success)
+            {
+                // The engine measures the real travel while it homes.
+                strokingMachine.physicalTravel = Stroker.getPhysicalTravel();
+            }
+
+            strokeStateService.update([&](StrokeState &state)
+                                      {
+                state.homed = success;
+                state.physicalTravel = strokingMachine.physicalTravel;
+                return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
+
+            esp32sveltekit.getNotificationService()->pushNotification(
+                success ? "Homed - ready to rumble" : "Homing failed",
+                success ? PUSHSUCCESS : PUSHERROR);
+
+            // Integer formatting only, the float path is what blew the stack.
+            Serial.printf("Homing %s, physical travel: %d mm\n", success ? "done" : "failed",
+                          (int)strokingMachine.physicalTravel);
+        }
+
         ServoState engineState = Stroker.getState();
         const char *stateName = servoStateName(engineState);
         bool running = (engineState == PATTERN || engineState == STREAMING);
@@ -391,7 +410,9 @@ void setup()
     startHoming();
 
     // Tasks
-    xTaskCreatePinnedToCore(syncStrokeStateTask, "strokeSync", 4096, NULL, 3, &strokeSyncHandle, 0);
+    // 8192: this task serialises the state to JSON and pushes it over the
+    // WebSocket, and it reports the homing result.
+    xTaskCreatePinnedToCore(syncStrokeStateTask, "strokeSync", 8192, NULL, 3, &strokeSyncHandle, 0);
     xTaskCreatePinnedToCore(speedCommandTask, "speedCommand", 3072, NULL, 4, &speedTaskHandle, 0);
 
     Serial.printf("OSSM-Stroke %s on %s ready\n", APP_VERSION, BUILD_TARGET);
