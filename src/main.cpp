@@ -74,6 +74,14 @@ float appliedSpeedMmPerSecond = SPEED_MIN_MM_PER_SECOND;
 // 32 bit aligned reads and writes, so no lock is needed for a single value.
 volatile float strokeUsableTravelMm = 0.0f;
 
+// Measured speed, computed here from the driver position with microsecond
+// timing. A client cannot do this: the 10 Hz WebSocket stream jitters with the
+// network, so every slope a client computes is noise. This number is the real
+// one, over one synchronisation period.
+static volatile float measuredSpeedMmPerSecond = 0.0f;
+static float lastSampleMm = 0.0f;
+static int64_t lastSampleUs = 0;
+
 // Written by the engine telemetry callback
 volatile float telemetryPositionMm = 0.0f;
 volatile float telemetrySpeedMmPerSecond = 0.0f;
@@ -347,7 +355,28 @@ void syncStrokeStateTask(void *pvParameters)
 
         // 0.1 mm resolution: no point in pushing noise over the wire
         float stepsPerMm = (servoMotor.stepsPerMillimeter > 0.0f) ? servoMotor.stepsPerMillimeter : 1.0f;
-        float positionMm = roundf(float(stepperDriver.getCurrentPosition()) / stepsPerMm * 10.0f) / 10.0f;
+        float rawMm = float(stepperDriver.getCurrentPosition()) / stepsPerMm;
+        float positionMm = roundf(rawMm * 10.0f) / 10.0f;
+
+        // Measured speed over the last period, from the unsmoothed position and
+        // the real elapsed microseconds.
+        int64_t nowUs = esp_timer_get_time();
+        if (lastSampleUs != 0)
+        {
+            float dt = float(nowUs - lastSampleUs) / 1000000.0f;
+            if (dt > 0.02f)
+            {
+                float v = (rawMm - lastSampleMm) / dt;
+                measuredSpeedMmPerSecond = (fabsf(v) < 0.8f) ? 0.0f : v;  // deadband: standing still is not noise
+                lastSampleMm = rawMm;
+                lastSampleUs = nowUs;
+            }
+        }
+        else
+        {
+            lastSampleMm = rawMm;
+            lastSampleUs = nowUs;
+        }
         float travel = strokingMachine.physicalTravel;
         float usable = travel - (2.0f * strokingMachine.keepoutBoundary);
         strokeUsableTravelMm = (usable > 0.0f) ? usable : 0.0f;
@@ -360,6 +389,8 @@ void syncStrokeStateTask(void *pvParameters)
             if (state.homed != homed) { state.homed = homed; changed = true; }
             if (state.clipping != clipping) { state.clipping = clipping; changed = true; }
             if (fabsf(state.position - positionMm) >= 0.05f) { state.position = positionMm; changed = true; }
+            float speedNow = measuredSpeedMmPerSecond;
+            if (fabsf(state.speedMeasured - speedNow) >= 0.5f) { state.speedMeasured = speedNow; changed = true; }
             if (fabsf(state.physicalTravel - travel) >= 0.05f) { state.physicalTravel = travel; changed = true; }
 
             String name = Stroker.getPatternName(state.pattern);

@@ -23,6 +23,7 @@
 		pattern_name: string;
 		homed: boolean;
 		position: number;
+		speed_measured: number;
 		physical_travel: number;
 		usable_travel: number;
 		sweep_start: number;
@@ -46,6 +47,7 @@
 		pattern_name: '',
 		homed: false,
 		position: 0,
+		speed_measured: 0,
 		physical_travel: 450,
 		usable_travel: 420,
 		sweep_start: 0,
@@ -128,6 +130,9 @@
 				<div class="stat-value text-2xl">{state.position.toFixed(1)} mm</div>
 				<div class="stat-desc">
 					sweep {state.sweep_start.toFixed(0)} to {state.depth.toFixed(0)} mm of {travel.toFixed(0)} mm
+				</div>
+				<div class="stat-desc">
+					speed {Math.abs(state.speed_measured).toFixed(0)} of {state.speed.toFixed(0)} mm/s
 				</div>
 			</div>
 			<div class="stat">

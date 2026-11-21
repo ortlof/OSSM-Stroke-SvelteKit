@@ -38,7 +38,7 @@ public:
     bool run = false;        // true: run the pattern, false: stop the motion
     bool home = false;       // transient: re-run the homing procedure, cleared by the firmware
     bool keepStrokeStart = false;  // when the depth changes, hold the near endpoint and grow the stroke
-    float speed = 10.0f;     // linear actuator speed in mm/s
+    float speed = 10.0f;     // commanded linear actuator speed in mm/s
     float depth = 0.0f;      // stroke depth in mm
     float stroke = 0.0f;     // stroke length in mm
     float sensation = 0.0f;  // pattern sensation, -100 .. 100
@@ -49,6 +49,7 @@ public:
     String patternName = "";
     bool homed = false;
     float position = 0.0f;         // current position in mm
+    float speedMeasured = 0.0f;    // measured speed in mm/s, from the driver position
     float physicalTravel = 0.0f;   // measured travel in mm between the hard stops
     bool clipping = false;         // engine had to clip a commanded motion
 
@@ -72,6 +73,7 @@ public:
         root["pattern_name"] = state.patternName;
         root["homed"] = state.homed;
         root["position"] = state.position;
+        root["speed_measured"] = state.speedMeasured;
         root["physical_travel"] = state.physicalTravel;
         root["usable_travel"] = strokeUsableTravelMm;
 
