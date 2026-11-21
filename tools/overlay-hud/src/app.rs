@@ -438,7 +438,7 @@ impl OverlayApp {
                         0 => {
                             ui.horizontal(|ui| {
                                 ui.add_space(pad);
-                                self.pattern_button(ui);
+                                let _ = self.pattern_button(ui);
                             });
                         }
                         2 => {
@@ -516,7 +516,7 @@ impl OverlayApp {
     /// `state.setup != 0`, and it is a glyph rather than a word so it stays
     /// small and can never be read as Start/Stop.
     /// Pattern selection without a combo box: a small square that opens a menu.
-    fn pattern_button(&mut self, ui: &mut egui::Ui) {
+    fn pattern_button(&mut self, ui: &mut egui::Ui) -> egui::Response {
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(SETUP_SIZE, SETUP_SIZE), Sense::click());
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(8), combo_fill());
@@ -550,7 +550,7 @@ impl OverlayApp {
             self.pattern = chosen;
             self.send_state(serde_json::json!({ "pattern": chosen }));
         }
-        resp.on_hover_text("pattern");
+        resp.on_hover_text("pattern")
     }
 
     fn keep_start_button(&mut self, ui: &mut egui::Ui) {
@@ -652,6 +652,55 @@ impl eframe::App for OverlayApp {
         // Scaling zooms the whole UI, which changes content_rect, which changes the
         // zoom: without a dead band that is a feedback loop and the panel jitters.
         // Only rescale when the size has genuinely changed by more than 12 percent.
+        // Two shapes: a small strip of two buttons, and the full panel. The strip
+        // opens when the pointer arrives and closes again when it leaves, so the
+        // overlay is out of the way by default and one hover away when wanted.
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        static EXPANDED: AtomicBool = AtomicBool::new(false);
+        static LEFT_AT: AtomicU64 = AtomicU64::new(0);
+        // Set while drawing the three-line button: only that button opens the panel,
+        // so the power button stays put and stays clickable when the panel is shut.
+        static OVER_OPENER: AtomicBool = AtomicBool::new(false);
+
+        const OPEN_W: f32 = 200.0;
+        const OPEN_H: f32 = 800.0;
+        const SHUT_W: f32 = 200.0;
+        const SHUT_H: f32 = 62.0;
+
+        let now_ms = (ctx.input(|i| i.time) * 1000.0) as u64;
+        let hovered = ctx.input(|i| i.pointer.hover_pos().is_some());
+        let dragging = self.speed_active
+            || self.depth_active
+            || self.stroke_active
+            || self.sensation_active;
+
+        if hovered || dragging {
+            LEFT_AT.store(0, Ordering::Relaxed);
+        } else if LEFT_AT.load(Ordering::Relaxed) == 0 {
+            LEFT_AT.store(now_ms, Ordering::Relaxed);
+        }
+
+        let mut expanded = EXPANDED.load(Ordering::Relaxed);
+        if !expanded && OVER_OPENER.load(Ordering::Relaxed) {
+            expanded = true;
+        }
+        let left = LEFT_AT.load(Ordering::Relaxed);
+        if expanded && !hovered && !dragging && left != 0 && now_ms.saturating_sub(left) > 400 {
+            expanded = false;
+        }
+        EXPANDED.store(expanded, Ordering::Relaxed);
+
+        let want = if expanded {
+            egui::vec2(OPEN_W, OPEN_H)
+        } else {
+            egui::vec2(SHUT_W, SHUT_H)
+        };
+        if let Some(sz) = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size())) {
+            if (sz.x - want.x).abs() > 2.0 || (sz.y - want.y).abs() > 2.0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(want));
+            }
+        }
+
         const DESIGN_W: f32 = 320.0;
         let cur = ctx.zoom_factor();
         let win_w = ctx.content_rect().width().max(1.0) * cur;
@@ -668,9 +717,20 @@ impl eframe::App for OverlayApp {
             .inner_margin(egui::Margin::same(10));
 
         egui::CentralPanel::default().frame(panel).show(ui, |ui| {
-            self.grip(ui);
-            ui.add_space(4.0);
-            self.sliders_row(ui);
+            if expanded {
+                OVER_OPENER.store(false, Ordering::Relaxed);
+                self.grip(ui);
+                ui.add_space(4.0);
+                self.sliders_row(ui);
+            } else {
+                // Shut: the power button and the three-line opener, nothing else.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    self.big_button(ui);
+                    let op = self.pattern_button(ui);
+                    OVER_OPENER.store(op.hovered(), Ordering::Relaxed);
+                });
+            }
         });
 
         // Keep the status dot and the values alive while the pointer is idle.
