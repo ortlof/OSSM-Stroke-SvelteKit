@@ -42,10 +42,11 @@ fn rail_c() -> Color32 {
     Color32::from_rgba_unmultiplied(0, 0, 0, 80)
 }
 fn fill_c() -> Color32 {
-    Color32::from_rgba_unmultiplied(96, 186, 255, 205)
+    // Light grey, not blue: the fill is a value indicator, not a brand colour.
+    Color32::from_rgba_unmultiplied(206, 209, 216, 170)
 }
 fn thumb_c() -> Color32 {
-    Color32::from_rgba_unmultiplied(238, 242, 255, 210)
+    Color32::from_rgba_unmultiplied(242, 243, 246, 225)
 }
 fn thumb_hot_c() -> Color32 {
     Color32::from_rgba_unmultiplied(255, 255, 255, 245)
@@ -60,10 +61,10 @@ fn grip_c() -> Color32 {
     Color32::from_rgba_unmultiplied(200, 205, 225, 90)
 }
 fn start_fill() -> Color32 {
-    Color32::from_rgba_unmultiplied(42, 140, 92, 170)
+    Color32::from_rgba_unmultiplied(42, 140, 92, 72)
 }
 fn stop_fill() -> Color32 {
-    Color32::from_rgba_unmultiplied(172, 55, 55, 170)
+    Color32::from_rgba_unmultiplied(172, 55, 55, 72)
 }
 fn disabled_fill() -> Color32 {
     Color32::from_rgba_unmultiplied(72, 74, 86, 110)
@@ -92,7 +93,7 @@ const OK: Color32 = Color32::from_rgb(120, 220, 140);
 const WARN: Color32 = Color32::from_rgb(240, 200, 90);
 const ERR: Color32 = Color32::from_rgb(240, 110, 110);
 
-const BUTTON_H: f32 = 54.0;
+const BUTTON_H: f32 = 44.0;
 const THUMB_H: f32 = 34.0;
 const GAP: f32 = 10.0;
 /// Height of the slim bottom row. Also reserved by `sliders_row` so the row can
@@ -506,6 +507,16 @@ impl eframe::App for OverlayApp {
         self.refresh_from_device(&ctx);
         self.poll_config_file(&ctx);
         self.handle_shortcut(&ctx);
+
+        // Responsive: the panel is laid out in DESIGN points and scaled to whatever
+        // size the window is, so resizing keeps it proportionate and legible instead
+        // of clipping or stranding small text.
+        const DESIGN_W: f32 = 380.0;
+        let win_w = ctx.content_rect().width().max(1.0);
+        let want_zoom = (win_w / DESIGN_W).clamp(0.6, 2.5);
+        if (ctx.zoom_factor() - want_zoom).abs() > 0.01 {
+            ctx.set_zoom_factor(want_zoom);
+        }
 
         let panel = egui::Frame::NONE
             .fill(panel_alpha_of(self.config.panel_alpha))
