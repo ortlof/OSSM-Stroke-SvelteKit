@@ -314,8 +314,11 @@ static void applyStrokeStateToEngine(const String &originId)
 
     if (!command.run && (engineState == PATTERN || engineState == STREAMING))
     {
-        Stroker.requestStop();  // non blocking controlled stop
-        return;
+        // Non blocking controlled stop. Do NOT return here: the same request may
+        // carry depth, stroke, pattern or sensation, and dropping them silently
+        // cost an hour of confusion once (a start was then refused because the
+        // stroke in that same request had been thrown away).
+        Stroker.requestStop();
     }
 
     Stroker.setDepth(command.depth, false);
