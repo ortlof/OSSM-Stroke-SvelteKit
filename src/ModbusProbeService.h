@@ -142,6 +142,9 @@ public:
     // --- position monitor result ---
     bool mbok = false;         // the last poll got a valid drive position
     bool alarmKnown = false;   // false: the fault bit is NOT identified yet
+    float speedActual = 0.0f;  // d08 motor speed, rpm converted to mm/s
+    float speedPeak = 0.0f;    // peak of the last run, mm/s
+    float forceN = 0.0f;       // d10 torque feedback as rack force, newtons
     int tqCmd = 0;             // d09 torque command, per mille of rating
     int tqFb = 0;              // d10 torque feedback, per mille
     int tqAvg = 0;             // d11 average torque
@@ -208,6 +211,9 @@ public:
         // drive_alarm is deliberately absent: the fault bit in Register25 is not
         // identified. A boolean here would be a guess wearing a warning label.
         root["drive_alarm_known"] = state.alarmKnown;
+        root["speed_actual_mm_s"] = state.speedActual;
+        root["speed_peak_mm_s"] = state.speedPeak;
+        root["force_n"] = state.forceN;
         root["torque_cmd_pct"] = state.tqCmd / 10.0f;
         root["torque_fb_pct"] = state.tqFb / 10.0f;
         root["torque_avg_pct"] = state.tqAvg / 10.0f;

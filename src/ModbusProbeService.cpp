@@ -250,7 +250,7 @@ void ModbusProbeService::probeLoop()
             pollAlarm();
         }
 
-        if ((uint32_t)(millis() - _lastTorqueMs) >= 500U)
+        if ((uint32_t)(millis() - _lastTorqueMs) >= 200U)
         {
             _lastTorqueMs = millis();
             pollTorque();
@@ -475,7 +475,7 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
     openPort();
 
     uint8_t request[MODBUS_RTU_REQUEST_LEN];
-    uint8_t reply[16];
+    uint8_t reply[MODBUS_RTU_READ_REPLY_MAX];
     uint8_t exc = 0;
 
     // --- forward, 0x01FE ---
@@ -562,6 +562,10 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
 // Poll the drive's own encoder position and compare it against the firmware's
 // step count. Both are integer counts: the difference is the lost steps nothing
 // else in this project can see. All arithmetic is integer; no float formatting.
+// Peak-hold state for the drive-reported speed.
+static float _peakMms = 0.0f;
+static uint32_t _lastMovingMs = 0;
+
 volatile bool modbusProbeInvert = true;
 
 // Consecutive polls where the firmware sent steps and the drive's counters did not
@@ -576,15 +580,16 @@ void ModbusProbeService::pollTorque()
     openPort();
 
     uint8_t request[MODBUS_RTU_REQUEST_LEN];
-    uint8_t reply[16];
+    uint8_t reply[MODBUS_RTU_READ_REPLY_MAX];
     uint8_t exc = 0;
 
     while (Serial2.available())
     {
         Serial2.read();
     }
-    // d09..d13 are consecutive: command, feedback, average, peak, overload (0.1 %).
-    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, 0x0843, 5);
+    // d06..d14 are consecutive in one request: input frequency, speed command,
+    // motor speed (rpm), then torque command/feedback/average/peak/overload (0.1 %).
+    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, 0x0840, 9);
     Serial2.write(request, reqLen);
     Serial2.flush();
     size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
@@ -594,19 +599,49 @@ void ModbusProbeService::pollTorque()
         return;
     }
 
-    int16_t v[5];
-    for (int i = 0; i < 5; i++)
+    int16_t v[9];
+    for (int i = 0; i < 9; i++)
     {
         v[i] = (int16_t)(((uint16_t)reply[3 + i * 2] << 8) | reply[4 + i * 2]);
     }
 
+    // The drive reports TRUE motor speed from its encoder. 9.4248 mm of carriage
+    // travel per motor revolution, so mm/s = rpm / 60 * 9.4248. This does not
+    // undersample the way client polling of the firmware's own estimate does.
+    int16_t rpm = v[2];
+    float mms = (rpm / 60.0f) * 9.4248f;
+
+    // Peak-hold for the current run: forget it after two seconds of standstill.
+    if (rpm > -5 && rpm < 5)
+    {
+        if ((uint32_t)(millis() - _lastMovingMs) > 2000U)
+        {
+            _peakMms = 0.0f;
+        }
+    }
+    else
+    {
+        _lastMovingMs = millis();
+        if (mms > _peakMms)
+        {
+            _peakMms = mms;
+        }
+    }
+
+    // Torque feedback in 0.1 % of 0.57 Nm rated, through a 20:1 gearbox onto a
+    // 30 mm pinion: 100 % is 380 N at the rack, so 1 unit (0.1 %) is 0.38 N.
+    float force = (v[4] / 10.0f) * 3.8f;
+
     update([&](ModbusProbeState &s)
            {
-        s.tqCmd = v[0];
-        s.tqFb = v[1];
-        s.tqAvg = v[2];
-        s.tqPeak = v[3];
-        s.tqOverload = v[4];
+        s.speedActual = mms;
+        s.speedPeak = _peakMms;
+        s.forceN = force;
+        s.tqCmd = v[3];
+        s.tqFb = v[4];
+        s.tqAvg = v[5];
+        s.tqPeak = v[6];
+        s.tqOverload = v[7];
         return StateUpdateResult::CHANGED; },
            MODBUS_PROBE_ORIGIN);
 }
@@ -616,7 +651,7 @@ void ModbusProbeService::pollAlarm()
     openPort();
 
     uint8_t request[MODBUS_RTU_REQUEST_LEN];
-    uint8_t reply[16];
+    uint8_t reply[MODBUS_RTU_READ_REPLY_MAX];
     uint8_t exc = 0;
 
     while (Serial2.available())
@@ -653,7 +688,7 @@ void ModbusProbeService::runParamWrite(int reg, int value)
     openPort();
 
     uint8_t request[MODBUS_RTU_REQUEST_LEN];
-    uint8_t reply[16];
+    uint8_t reply[MODBUS_RTU_READ_REPLY_MAX];
     uint8_t exc = 0;
 
     while (Serial2.available())
@@ -705,7 +740,7 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm, 
     openPort();
 
     uint8_t request[MODBUS_RTU_REQUEST_LEN];
-    uint8_t reply[16];
+    uint8_t reply[MODBUS_RTU_READ_REPLY_MAX];
     uint8_t exc = 0;
 
     // The position monitors are 32-bit values served as two registers, high word
