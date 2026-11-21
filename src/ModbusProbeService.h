@@ -110,6 +110,7 @@ public:
     // --- range-read result ---
     int rreg = -1;         // register the last read asked for
     int rcount = 0;        // registers the last read asked for
+    int rfunc = modbus_rtu::MODBUS_FUNC_READ_HOLDING;  // 3 holding, 4 input
     bool rok = false;      // the read answered with valid data
     int rn = 0;            // number of values published
     int rvals[32] = {0};   // the values, published as a decimal array
@@ -153,6 +154,7 @@ public:
 
         root["read_reg"] = state.rreg;
         root["read_count"] = state.rcount;
+        root["read_func"] = state.rfunc;
         root["read_ok"] = state.rok;
         root["read_err"] = state.rerr;
         root["read_hex"] = state.rhex;
@@ -213,11 +215,12 @@ public:
         }
 
         // --- range read request ---
-        if (!root["read_reg"].isNull() || !root["read_count"].isNull())
+        if (!root["read_reg"].isNull() || !root["read_count"].isNull() || !root["read_func"].isNull())
         {
             int reg = root["read_reg"] | -1;
             int count = root["read_count"] | 0;
-            if (!modbus_rtu::readRangeValid(reg, count))
+            int func = root["read_func"] | (int)modbus_rtu::MODBUS_FUNC_READ_HOLDING;
+            if (!modbus_rtu::readRangeValid(reg, count) || !modbus_rtu::readFuncValid(func))
             {
                 // Refuse, and say why. A range read is only a read, but a
                 // request that lies about what it wants must not be acted on.
@@ -227,13 +230,14 @@ public:
                 state.rn = 0;
                 state.rhex = "";
                 state.rerr = 0;
-                state.msg = "read rejected: register 0x0000..0x1FFF, count 1..32";
+                state.msg = "read rejected: register 0x0000..0x1FFF, count 1..32, func 3 or 4";
                 changed = true;
             }
             else
             {
                 state.rreg = reg;
                 state.rcount = count;
+                state.rfunc = func;
                 state.readPending = true;
                 state.msg = "range read queued";
                 changed = true;

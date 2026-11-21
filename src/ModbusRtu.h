@@ -58,10 +58,18 @@ inline uint16_t crc16(const uint8_t *data, size_t len)
 
 // Build a read-holding-registers (function 3) request. Returns the frame length
 // in bytes (always MODBUS_RTU_REQUEST_LEN).
-inline uint8_t buildReadRequest(uint8_t *buf, uint8_t unit, uint16_t start, uint16_t count)
+// The two read function codes. Only these may ever be emitted: the write path is
+// still hard-wired to the torque registers and function 6, and nothing here adds
+// a third alternative.
+constexpr uint8_t MODBUS_FUNC_READ_HOLDING = 0x03;
+constexpr uint8_t MODBUS_FUNC_READ_INPUT = 0x04;
+
+inline uint8_t buildReadRequest(uint8_t *buf, uint8_t unit, uint16_t start, uint16_t count,
+                                uint8_t func = MODBUS_FUNC_READ_HOLDING)
 {
     buf[0] = unit;
-    buf[1] = 0x03;  // read holding registers
+    // Whatever the caller passes, only the two read functions can be emitted.
+    buf[1] = (func == MODBUS_FUNC_READ_INPUT) ? MODBUS_FUNC_READ_INPUT : MODBUS_FUNC_READ_HOLDING;
     buf[2] = (uint8_t)(start >> 8);
     buf[3] = (uint8_t)(start & 0x00FF);
     buf[4] = (uint8_t)(count >> 8);
@@ -89,7 +97,8 @@ enum ReadReply
 // byte except the two CRC bytes themselves. `expectedUnit` and the CRC are the
 // gates a real device has to pass before anything is believed. The smallest
 // legal reply is 5 bytes: unit, function, byte count, crc lo, crc hi.
-inline ReadReply checkReadReply(const uint8_t *frame, size_t len, uint8_t expectedUnit, uint8_t *exceptionCode)
+inline ReadReply checkReadReply(const uint8_t *frame, size_t len, uint8_t expectedUnit, uint8_t *exceptionCode,
+                                uint8_t expectedFunc = MODBUS_FUNC_READ_HOLDING)
 {
     if (len < 5)
     {
@@ -117,7 +126,7 @@ inline ReadReply checkReadReply(const uint8_t *frame, size_t len, uint8_t expect
         return REPLY_EXCEPTION;
     }
 
-    if (frame[1] != 0x03)
+    if (frame[1] != expectedFunc)
     {
         return REPLY_BAD_FUNCTION;
     }
@@ -138,6 +147,11 @@ inline ReadReply checkReadReply(const uint8_t *frame, size_t len, uint8_t expect
 
 // True when [start, start+count-1] is a legal read window. Both ends are checked
 // so a request can never walk off the top of the allowed register map.
+inline bool readFuncValid(int32_t func)
+{
+    return func == MODBUS_FUNC_READ_HOLDING || func == MODBUS_FUNC_READ_INPUT;
+}
+
 inline bool readRangeValid(int32_t start, int32_t count)
 {
     return start >= 0 && start <= MODBUS_READ_REG_MAX &&

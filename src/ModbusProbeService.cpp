@@ -363,18 +363,24 @@ void ModbusProbeService::runProbe()
 // on the drive changes.
 void ModbusProbeService::runRangeRead(int reg, int count)
 {
+    // The function comes from the request (3 holding or 4 input). Read only,
+    // either way: no register on the drive changes.
+    int func = modbus_rtu::MODBUS_FUNC_READ_HOLDING;
+    update([&](ModbusProbeState &s)
+           { func = s.rfunc; return StateUpdateResult::UNCHANGED; },
+           MODBUS_PROBE_ORIGIN);
     openPort();
 
     uint8_t request[MODBUS_RTU_REQUEST_LEN];
     uint8_t reply[MODBUS_RTU_READ_REPLY_MAX];
     uint8_t exc = 0;
 
-    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, (uint16_t)reg, (uint16_t)count);
+    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, (uint16_t)reg, (uint16_t)count, (uint8_t)func);
     Serial2.write(request, reqLen);
     Serial2.flush();
 
     size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
-    modbus_rtu::ReadReply rr = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
+    modbus_rtu::ReadReply rr = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc, (uint8_t)func);
 
     int values[32] = {0};
     int n = 0;
