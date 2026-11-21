@@ -35,4 +35,4 @@ window_width = 240.0
 window_height = 480.0
 
 # Panel opacity, 0 invisible .. 255 solid. Lower it for VR.
-panel_alpha = 96
+panel_alpha = 3

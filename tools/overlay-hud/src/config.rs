@@ -48,7 +48,7 @@ impl Default for Config {
             click_through_shortcut: "Ctrl+Shift+O".to_string(),
             window_width: 240.0,
             window_height: 480.0,
-            panel_alpha: 96,
+            panel_alpha: 3,   // about 99 percent transparent: the view behind stays clear
         }
     }
 }

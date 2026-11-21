@@ -33,38 +33,40 @@ use std::time::{Duration, Instant};
 // Translucent throughout: the panel is roughly 43 % opaque, so the video or VR
 // window behind it stays readable while the controls stay legible.
 fn panel_alpha_of(alpha: u8) -> Color32 {
-    Color32::from_rgba_unmultiplied(12, 12, 16, alpha)
+    // A whisper of tint, nothing more: the machine's own view should not be dimmed.
+    Color32::from_rgba_unmultiplied(18, 20, 24, alpha)
 }
 fn border() -> Color32 {
-    Color32::from_rgba_unmultiplied(160, 165, 190, 70)
+    Color32::from_rgba_unmultiplied(70, 74, 82, 34)
 }
 fn rail_c() -> Color32 {
-    Color32::from_rgba_unmultiplied(0, 0, 0, 80)
+    // Barely a shade from the panel: the fader is found by its outline, not its mass.
+    Color32::from_rgba_unmultiplied(54, 58, 66, 48)
 }
 fn fill_c() -> Color32 {
-    // Light grey, not blue: the fill is a value indicator, not a brand colour.
-    Color32::from_rgba_unmultiplied(206, 209, 216, 170)
+    Color32::from_rgba_unmultiplied(96, 100, 110, 70)
 }
 fn thumb_c() -> Color32 {
-    Color32::from_rgba_unmultiplied(242, 243, 246, 225)
+    Color32::from_rgba_unmultiplied(42, 45, 52, 132)
 }
 fn thumb_hot_c() -> Color32 {
-    Color32::from_rgba_unmultiplied(255, 255, 255, 245)
+    Color32::from_rgba_unmultiplied(30, 32, 38, 190)
 }
 fn thumb_text() -> Color32 {
-    Color32::from_rgba_unmultiplied(12, 14, 20, 255)
+    Color32::from_rgba_unmultiplied(210, 214, 222, 255)
 }
 fn label_c() -> Color32 {
-    Color32::from_rgba_unmultiplied(226, 230, 244, 215)
+    // Very dark grey, not white: over a bright view this reads as a shadow, not a label.
+    Color32::from_rgba_unmultiplied(34, 36, 42, 235)
 }
 fn grip_c() -> Color32 {
-    Color32::from_rgba_unmultiplied(200, 205, 225, 90)
+    Color32::from_rgba_unmultiplied(46, 49, 56, 60)
 }
 fn start_fill() -> Color32 {
-    Color32::from_rgba_unmultiplied(42, 140, 92, 72)
+    Color32::from_rgba_unmultiplied(42, 140, 92, 150)
 }
 fn stop_fill() -> Color32 {
-    Color32::from_rgba_unmultiplied(172, 55, 55, 72)
+    Color32::from_rgba_unmultiplied(172, 55, 55, 150)
 }
 fn disabled_fill() -> Color32 {
     Color32::from_rgba_unmultiplied(72, 74, 86, 110)
@@ -72,21 +74,21 @@ fn disabled_fill() -> Color32 {
 // The compact selectors in the bottom row: translucent so the desktop keeps
 // showing through, like every other surface in this panel.
 fn combo_fill() -> Color32 {
-    Color32::from_rgba_unmultiplied(38, 42, 54, 175)
+    Color32::from_rgba_unmultiplied(40, 43, 50, 62)
 }
 fn combo_hot() -> Color32 {
-    Color32::from_rgba_unmultiplied(58, 64, 82, 205)
+    Color32::from_rgba_unmultiplied(56, 60, 68, 96)
 }
 // Depth-setup mode is amber, deliberately neither the Start green nor the Stop
 // red, so the small button can never be read as Start/Stop.
 fn setup_on_fill() -> Color32 {
-    Color32::from_rgba_unmultiplied(206, 150, 46, 225)
+    Color32::from_rgba_unmultiplied(150, 112, 34, 190)
 }
 fn setup_off_fill() -> Color32 {
-    Color32::from_rgba_unmultiplied(70, 74, 90, 160)
+    Color32::from_rgba_unmultiplied(60, 63, 70, 70)
 }
 fn glyph_c() -> Color32 {
-    Color32::from_rgba_unmultiplied(245, 247, 252, 240)
+    Color32::from_rgba_unmultiplied(32, 34, 40, 235)
 }
 
 const OK: Color32 = Color32::from_rgb(120, 220, 140);
