@@ -190,7 +190,7 @@ void ModbusProbeService::probeLoop()
             }
 
             posReg = s.mbPositionRegister;
-            countsPerMm = s.mbCountsPerMm;
+            countsPerMm = s.mbCountsPerMmMilli;
             mbEnabled = s.mbEnabled;
             pollMs = s.mbPollMs;
 
@@ -230,7 +230,7 @@ void ModbusProbeService::probeLoop()
             uint32_t now = millis();
             if ((uint32_t)(now - _lastPollMs) >= (uint32_t)pollMs)
             {
-                runPositionPoll(posReg, countsPerMm);
+                runPositionPoll(posReg, countsPerMm, modbusProbeInvert);
                 _lastPollMs = millis();
             }
         }
@@ -510,7 +510,9 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
 // Poll the drive's own encoder position and compare it against the firmware's
 // step count. Both are integer counts: the difference is the lost steps nothing
 // else in this project can see. All arithmetic is integer; no float formatting.
-void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm)
+volatile bool modbusProbeInvert = true;
+
+void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm, bool invert)
 {
     openPort();
 
@@ -518,7 +520,9 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm)
     uint8_t reply[16];
     uint8_t exc = 0;
 
-    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, (uint16_t)positionRegister, 1);
+    // The position monitors are 32-bit values served as two registers, high word
+    // first. Reading one register would wrap every 327 mm of travel.
+    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, (uint16_t)positionRegister, 2);
     Serial2.write(request, reqLen);
     Serial2.flush();
 
@@ -528,7 +532,8 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm)
     modbus_rtu::ReadReply rr = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
 
     bool ok = (rr == modbus_rtu::REPLY_OK);
-    int32_t drive = ok ? (((int32_t)reply[3] << 8) | (int32_t)reply[4]) : -1;
+    int32_t drive = ok ? (int32_t)(((uint32_t)reply[3] << 24) | ((uint32_t)reply[4] << 16) |
+                                   ((uint32_t)reply[5] << 8) | (uint32_t)reply[6]) : -1;
 
     int32_t stepsPerMmX1000 = modbusFirmwareStepsPerMmX1000;
     if (stepsPerMmX1000 < 1)
@@ -544,7 +549,17 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm)
     int lost = 0;
     int lostMmMilli = 0;
 
-    if (ok && !_posRefValid)
+    // Lost steps only mean anything when the machine is standing still. While it
+    // moves, the drive legitimately trails the command (that is the following
+    // error) and the two counters are sampled a few milliseconds apart, so a
+    // comparison made mid-move measures the motion, not a fault. Two polls that
+    // read identical values from both sources mean rest.
+    bool atRest = _haveLast && (fwSteps == _lastFwSteps) && (drive == _lastDrive);
+    _lastFwSteps = fwSteps;
+    _lastDrive = drive;
+    _haveLast = ok;
+
+    if (ok && atRest && !_posRefValid)
     {
         // A new poll cycle starts: this drive reading and the firmware step
         // count at this instant become the reference everything is measured
@@ -554,16 +569,20 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm)
         _posRefDrive = drive;
     }
 
-    if (ok && _posRefValid)
+    if (ok && atRest && _posRefValid)
     {
         int32_t stepsSinceRef = fwSteps - _posRefSteps;
         travelledMilli = (int)(((int64_t)stepsSinceRef * 1000000) / stepsPerMmX1000);
-        expected = (int)(((int64_t)travelledMilli * countsPerMm) / 1000);
-        actual = (int)(drive - _posRefDrive);
+        // countsPerMm is carried in thousandths, so 84.88 counts per mm is 84880
+        // and the arithmetic stays exact in integers.
+        expected = (int)(((int64_t)travelledMilli * countsPerMm) / 1000000);
+        // The drive counts down as the carriage goes up on this machine, so the
+        // reference is subtracted the other way round when mbInvert is set.
+        actual = invert ? (int)(_posRefDrive - drive) : (int)(drive - _posRefDrive);
         lost = expected - actual;
         if (countsPerMm != 0)
         {
-            lostMmMilli = (int)(((int64_t)lost * 1000) / countsPerMm);
+            lostMmMilli = (int)(((int64_t)lost * 1000000) / countsPerMm);
         }
     }
 
@@ -571,6 +590,7 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm)
            {
         s.mbok = ok;
         s.mbReg = ok ? (int)drive : -1;
+        s.mbSettled = atRest;
         s.mbFwMmMilli = fwMmMilli;
         s.mbTravelledMilli = travelledMilli;
         s.mbExpected = expected;

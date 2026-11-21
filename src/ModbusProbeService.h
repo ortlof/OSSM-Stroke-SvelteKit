@@ -30,7 +30,7 @@
  *     {"read_reg": N, "read_count": M}                range read, function 3
  *     {"torque_forward": X, "torque_reverse": Y, "apply": true}
  *     {"mb_rebaseline": true}                         re-baseline the monitor
- *     {"mb_position_register": R, "mb_counts_per_mm": C,
+ *     {"mb_position_register": R, "mb_counts_per_mm_milli": C,
  *      "mb_enabled": b, "mb_poll_ms": T}              monitor settings
  *   A GET returns the whole state. Nothing is written to flash, so a reboot
  *   returns to the compiled-in defaults.
@@ -73,7 +73,9 @@
 // The firmware's own step count and its steps-per-mm, scaled by 1000 so the
 // monitor can stay in integer arithmetic. Owned by main.cpp (the motion side);
 // read here as plain aligned 32-bit values, so no lock is needed.
+extern volatile bool modbusProbeInvert;   // mirror of mbInvert, for the poll task
 extern volatile int32_t modbusFirmwareSteps;
+
 extern volatile int32_t modbusFirmwareStepsPerMmX1000;
 
 class ModbusProbeState
@@ -90,9 +92,12 @@ public:
     bool rebaseline = false;   // transient: re-baseline the position reference
 
     // --- position monitor settings (writable from a POST) ---
-    int mbPositionRegister = 0xFFFF;  // drive register with the encoder position; 0xFFFF disables
-    int mbCountsPerMm = 0;            // drive counts per mm of carriage travel; 0 disables
-    bool mbEnabled = false;           // the monitor runs only when this is true
+    // Identified on this machine: 0x0836/0x0837 is the feedback pulse sum (d01),
+    // 32-bit high word first, in the same pulse units the firmware counts.
+    int mbPositionRegister = 0x0836;  // the register's HIGH word; 0xFFFF disables
+    int mbCountsPerMmMilli = 84880;   // drive counts per mm x 1000; 0 disables. 84.88 here.
+    bool mbInvert = true;             // the drive counts down as the carriage goes up
+    bool mbEnabled = true;            // polling on by default now that it is proven
     int mbPollMs = MODBUS_PROBE_POLL_DEFAULT_MS;  // poll interval, floored at 500 ms
 
     // --- status (owned by the task) ---
@@ -133,7 +138,8 @@ public:
     int mbExpected = 0;        // drive counts expected from the mm travelled
     int mbActual = 0;          // drive counts actually seen since the reference
     int mbLost = 0;            // lost counts (expected - actual)
-    int mbLostMmMilli = 0;     // lost millimetres, milli-mm
+    int mbLostMmMilli = 0;
+    bool mbSettled = false;  // the last comparison was taken with the machine at rest     // lost millimetres, milli-mm
 
     String msg = "";  // short headline for the UI / a rejection reason
 
@@ -172,7 +178,9 @@ public:
         root["torque_ok"] = state.tok;
 
         root["mb_position_register"] = state.mbPositionRegister;
-        root["mb_counts_per_mm"] = state.mbCountsPerMm;
+        root["mb_counts_per_mm_milli"] = state.mbCountsPerMmMilli;
+        root["mb_invert"] = state.mbInvert;
+        root["mb_settled"] = state.mbSettled;
         root["mb_enabled"] = state.mbEnabled;
         root["mb_poll_ms"] = state.mbPollMs;
         root["mb_ok"] = state.mbok;
@@ -194,7 +202,8 @@ public:
 
         // --- position monitor settings ---
         int posReg = root["mb_position_register"] | state.mbPositionRegister;
-        int countsPerMm = root["mb_counts_per_mm"] | state.mbCountsPerMm;
+        int countsPerMm = root["mb_counts_per_mm_milli"] | state.mbCountsPerMmMilli;
+            bool invert = root["mb_invert"] | state.mbInvert;
         bool mbEnabled = root["mb_enabled"] | state.mbEnabled;
         int pollMs = root["mb_poll_ms"] | state.mbPollMs;
         if (pollMs < MODBUS_PROBE_POLL_MIN_MS)
@@ -204,11 +213,13 @@ public:
         if (posReg < 0) posReg = 0;
         if (posReg > 0xFFFF) posReg = 0xFFFF;
         if (countsPerMm < 0) countsPerMm = 0;
-        if (posReg != state.mbPositionRegister || countsPerMm != state.mbCountsPerMm ||
+        if (posReg != state.mbPositionRegister || countsPerMm != state.mbCountsPerMmMilli ||
             mbEnabled != state.mbEnabled || pollMs != state.mbPollMs)
         {
             state.mbPositionRegister = posReg;
-            state.mbCountsPerMm = countsPerMm;
+            state.mbCountsPerMmMilli = countsPerMm;
+            state.mbInvert = invert;
+            modbusProbeInvert = invert;
             state.mbEnabled = mbEnabled;
             state.mbPollMs = pollMs;
             changed = true;
@@ -326,7 +337,7 @@ private:
     void runProbe();
     void runRangeRead(int reg, int count);
     void runTorqueWrite(int forwardRaw, int reverseRaw);
-    void runPositionPoll(int positionRegister, int countsPerMm);
+    void runPositionPoll(int positionRegister, int countsPerMm, bool invert);
     void openPort();
 
     HttpEndpoint<ModbusProbeState> _httpEndpoint;
@@ -340,6 +351,9 @@ private:
     bool _posRefValid = false;      // a reference has been taken this cycle
     int32_t _posRefSteps = 0;       // firmware step count at the reference
     int32_t _posRefDrive = 0;       // drive register value at the reference
+    int32_t _lastFwSteps = 0;       // previous poll's step count, to detect rest
+    int32_t _lastDrive = 0;         // previous poll's drive value
+    bool _haveLast = false;         // a previous poll exists to compare against
     int _posAppliedReg = -1;        // config the current cycle was started with
     int _posAppliedCounts = -1;
     uint32_t _lastPollMs = 0;
