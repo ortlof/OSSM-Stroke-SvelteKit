@@ -78,6 +78,8 @@ fn main() -> eframe::Result<()> {
             .with_app_id("ossm-overlay-hud")
             .with_inner_size([cfg.window_width, cfg.window_height])
             .with_min_inner_size([320.0, 190.0])
+            // No OS drop shadow: a faint overlay must not cast one.
+            .with_has_shadow(false)
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(true)

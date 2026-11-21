@@ -82,7 +82,7 @@ impl Default for Config {
             settings_poll_secs: 2.0,
             click_through: false,
             click_through_shortcut: "Ctrl+Shift+O".to_string(),
-            window_width: 200.0,
+            window_width: 250.0,
             window_height: 800.0,   // the expanded shape
             panel_alpha: 3,   // about 99 percent transparent: the view behind stays clear
             layout: Layout::default(),

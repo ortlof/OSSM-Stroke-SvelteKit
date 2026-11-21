@@ -378,7 +378,7 @@ impl OverlayApp {
         let w = if L.slider_width > 1.0 {
             L.slider_width
         } else {
-            ((ui.available_width() - gap * 3.0) / 4.0).floor().max(48.0)
+            ((ui.available_width() - gap * 3.0) / 4.0).floor().max(30.0)
         };
         let THUMB = L.thumb_height;
         let CAPS = L.cap_size;
@@ -662,9 +662,9 @@ impl eframe::App for OverlayApp {
         // so the power button stays put and stays clickable when the panel is shut.
         static OVER_OPENER: AtomicBool = AtomicBool::new(false);
 
-        const OPEN_W: f32 = 200.0;
+        const OPEN_W: f32 = 250.0;
         const OPEN_H: f32 = 800.0;
-        const SHUT_W: f32 = 200.0;
+        const SHUT_W: f32 = 250.0;
         const SHUT_H: f32 = 62.0;
 
         let now_ms = (ctx.input(|i| i.time) * 1000.0) as u64;
@@ -710,7 +710,7 @@ impl eframe::App for OverlayApp {
             ctx.set_zoom_factor(want_zoom);
         }
 
-        let panel = egui::Frame::NONE
+        let panel = egui::Frame::NONE.shadow(egui::epaint::Shadow::NONE)
             .fill(panel_alpha_of(self.config.panel_alpha))
             .stroke(egui::Stroke::new(1.0, border()))
             .corner_radius(CornerRadius::same(16))

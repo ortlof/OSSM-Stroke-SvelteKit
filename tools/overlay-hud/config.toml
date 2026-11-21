@@ -31,7 +31,7 @@ click_through = false
 click_through_shortcut = "Ctrl+Shift+O"
 
 # Initial window size in logical points.
-window_width = 200.0
+window_width = 250.0
 window_height = 800.0
 
 # Panel opacity, 0 invisible .. 255 solid. Lower it for VR.
