@@ -69,6 +69,11 @@ float userSpeedLimit = OSSM_USER_SPEEDLIMIT_MM_S;
 
 float appliedSpeedMmPerSecond = SPEED_MIN_MM_PER_SECOND;
 
+// Range the engine really allows in mm, published for the state updater
+// (see StrokeStateService.h). Written at boot, after homing and by the sync task;
+// 32 bit aligned reads and writes, so no lock is needed for a single value.
+volatile float strokeUsableTravelMm = 0.0f;
+
 // Written by the engine telemetry callback
 volatile float telemetryPositionMm = 0.0f;
 volatile float telemetrySpeedMmPerSecond = 0.0f;
@@ -78,6 +83,7 @@ TaskHandle_t speedTaskHandle = nullptr;
 TaskHandle_t strokeSyncHandle = nullptr;
 
 float clampSpeedMmPerSecond(float requestedSpeed);
+static float usableTravel();
 static const char *servoStateName(ServoState state);
 static void homingNotification(bool isHomed);
 static void telemetryCallback(float positionMm, float speedMmPerSecond, bool clipping);
@@ -101,6 +107,13 @@ float clampSpeedMmPerSecond(float requestedSpeed)
     // StrokeEngine works with a linear actuator speed in mm/s, never with a raw
     // stroke rate. Clamp to what the machine and the user allow.
     return constrain(requestedSpeed, SPEED_MIN_MM_PER_SECOND, userSpeedLimit);
+}
+
+// Range the engine really uses: both keepout zones are subtracted.
+static float usableTravel()
+{
+    float usable = strokingMachine.physicalTravel - (2.0f * strokingMachine.keepoutBoundary);
+    return (usable > 0.0f) ? usable : 0.0f;
 }
 
 static const char *servoStateName(ServoState state)
@@ -167,12 +180,16 @@ static void loadSettings()
 
     userSpeedLimit = min(settings.user_speed_limit, settings.max_speed);
 
+    strokeUsableTravelMm = settings.physical_travel - (2.0f * settings.keepout);
+
     strokeStateService.update([&](StrokeState &state)
                               {
         state.physicalTravel = settings.physical_travel;
-        state.usableTravel = settings.physical_travel - (2.0f * settings.keepout);
+        state.usableTravel = strokeUsableTravelMm;
         state.speed = clampSpeedMmPerSecond(state.speed);
         return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
+
+
 }
 
 // ---------------------------------------------------------------------------
@@ -212,6 +229,8 @@ static void applyStrokeStateToEngine(const String &originId)
     strokeStateService.read([&command](StrokeState &state)
                             { command = state; });
 
+    // The state updater already keeps depth and stroke consistent, and it
+    // runs under the state mutex, so this applies exactly what the browser sees.
     ServoState engineState = Stroker.getState();
 
     if (command.home)
@@ -304,6 +323,7 @@ void syncStrokeStateTask(void *pvParameters)
             // keepout zones. Offer the same range to the browser, otherwise the
             // engine silently clamps what the sliders send.
             float usable = strokingMachine.physicalTravel - (2.0f * strokingMachine.keepoutBoundary);
+            strokeUsableTravelMm = (usable > 0.0f) ? usable : 0.0f;
 
             strokeStateService.update([&](StrokeState &state)
                                       {
@@ -332,6 +352,8 @@ void syncStrokeStateTask(void *pvParameters)
         float positionMm = roundf(float(stepperDriver.getCurrentPosition()) / stepsPerMm * 10.0f) / 10.0f;
         float travel = strokingMachine.physicalTravel;
         float usable = travel - (2.0f * strokingMachine.keepoutBoundary);
+        strokeUsableTravelMm = (usable > 0.0f) ? usable : 0.0f;
+        float sweepStart = 0.0f;
 
         strokeStateService.update([&](StrokeState &state)
                                   {
@@ -343,6 +365,10 @@ void syncStrokeStateTask(void *pvParameters)
             if (fabsf(state.position - positionMm) >= 0.05f) { state.position = positionMm; changed = true; }
             if (fabsf(state.physicalTravel - travel) >= 0.05f) { state.physicalTravel = travel; changed = true; }
             if (fabsf(state.usableTravel - usable) >= 0.05f) { state.usableTravel = usable; changed = true; }
+
+            // near endpoint of the sweep, never below the home position
+            sweepStart = (state.depth - state.stroke > 0.0f) ? (state.depth - state.stroke) : 0.0f;
+            if (fabsf(state.sweepStart - sweepStart) >= 0.05f) { state.sweepStart = sweepStart; changed = true; }
 
             String name = Stroker.getPatternName(state.pattern);
             if (state.patternName != name) { state.patternName = name; changed = true; }

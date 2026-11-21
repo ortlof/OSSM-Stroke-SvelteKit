@@ -13,6 +13,7 @@
 
 	interface StrokeState {
 		run: boolean;
+		keep_stroke_start: boolean;
 		speed: number;
 		depth: number;
 		stroke: number;
@@ -23,6 +24,8 @@
 		homed: boolean;
 		position: number;
 		physical_travel: number;
+		usable_travel: number;
+		sweep_start: number;
 		clipping: boolean;
 	}
 
@@ -33,6 +36,7 @@
 
 	let state: StrokeState = $state({
 		run: false,
+		keep_stroke_start: false,
 		speed: 20,
 		depth: 0,
 		stroke: 0,
@@ -44,6 +48,7 @@
 		position: 0,
 		physical_travel: 450,
 		usable_travel: 420,
+		sweep_start: 0,
 		clipping: false
 	});
 
@@ -121,7 +126,9 @@
 			<div class="stat">
 				<div class="stat-title">Position</div>
 				<div class="stat-value text-2xl">{state.position.toFixed(1)} mm</div>
-				<div class="stat-desc">usable travel {travel.toFixed(0)} mm</div>
+				<div class="stat-desc">
+					sweep {state.sweep_start.toFixed(0)} to {state.depth.toFixed(0)} mm of {travel.toFixed(0)} mm
+				</div>
 			</div>
 			<div class="stat">
 				<div class="stat-title">Pattern</div>
@@ -211,6 +218,25 @@
 					bind:value={state.stroke}
 					onchange={() => command({ stroke: state.stroke })}
 				/>
+			</div>
+
+			<div class="fieldset">
+				<label class="label cursor-pointer justify-start" for="keepstart">
+					<input
+						id="keepstart"
+						type="checkbox"
+						class="toggle toggle-primary mr-3"
+						bind:checked={state.keep_stroke_start}
+						onchange={() => command({ keep_stroke_start: state.keep_stroke_start })}
+					/>
+					<span class="text-base"
+						>Keep the stroke start on depth change — a larger depth then makes a longer
+						stroke</span
+					>
+				</label>
+				<div class="label">
+					Off: the whole sweep slides forward. On: the near end stays, the stroke grows.
+				</div>
 			</div>
 
 			<div class="fieldset">

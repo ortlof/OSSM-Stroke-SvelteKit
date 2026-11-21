@@ -25,12 +25,19 @@
 #define STROKE_STATE_EVENT "stroke"
 #define STROKE_ENGINE_ORIGIN "strokeEngine"
 
+// The range the engine really allows, in mm. main.cpp keeps this current: the
+// machine settings at boot, the measured travel after homing. The JSON updater
+// needs it, and that updater runs under the state mutex, so it arrives as a
+// plain global instead of a parameter.
+extern volatile float strokeUsableTravelMm;
+
 class StrokeState
 {
 public:
     // --- commands ---
     bool run = false;        // true: run the pattern, false: stop the motion
     bool home = false;       // transient: re-run the homing procedure, cleared by the firmware
+    bool keepStrokeStart = false;  // when the depth changes, hold the near endpoint and grow the stroke
     float speed = 10.0f;     // linear actuator speed in mm/s
     float depth = 0.0f;      // stroke depth in mm
     float stroke = 0.0f;     // stroke length in mm
@@ -44,12 +51,14 @@ public:
     float position = 0.0f;         // current position in mm
     float physicalTravel = 0.0f;   // measured travel in mm between the hard stops
     float usableTravel = 0.0f;     // physicalTravel minus both keepout zones, the real range
+    float sweepStart = 0.0f;       // near endpoint of the sweep in mm, = depth - stroke
     bool clipping = false;         // engine had to clip a commanded motion
 
     static void read(StrokeState &state, JsonObject &root)
     {
         root["run"] = state.run;
         root["home"] = state.home;
+        root["keep_stroke_start"] = state.keepStrokeStart;
         root["speed"] = state.speed;
         root["depth"] = state.depth;
         root["stroke"] = state.stroke;
@@ -62,22 +71,54 @@ public:
         root["position"] = state.position;
         root["physical_travel"] = state.physicalTravel;
         root["usable_travel"] = state.usableTravel;
+        root["sweep_start"] = state.sweepStart;
         root["clipping"] = state.clipping;
     }
 
     static StateUpdateResult update(JsonObject &root, StrokeState &state, const String &originId)
     {
         // A client may post a single field, so every field falls back to the
-        // value that is already in the state.
+        // value that is already in the state. depth and stroke use -1 as a "not
+        // sent" marker, because neither of them can be negative.
+        const float depthIn = root["depth"] | -1.0f;
+        const float strokeIn = root["stroke"] | -1.0f;
+        const bool depthSent = (depthIn >= 0.0f);
+        const bool strokeSent = (strokeIn >= 0.0f);
+
         bool run = root["run"] | state.run;
         bool home = root["home"] | state.home;
+        bool keepStrokeStart = root["keep_stroke_start"] | state.keepStrokeStart;
         float speed = root["speed"] | state.speed;
-        float depth = root["depth"] | state.depth;
-        float stroke = root["stroke"] | state.stroke;
+        float depth = depthSent ? depthIn : state.depth;
+        float stroke = strokeSent ? strokeIn : state.stroke;
         float sensation = root["sensation"] | state.sensation;
         int pattern = root["pattern"] | state.pattern;
 
-        if (run == state.run && home == state.home && speed == state.speed && depth == state.depth &&
+        // Option "keep the stroke start": when only the depth arrives, hold the
+        // near endpoint of the sweep and let the stroke grow instead. The sweep
+        // runs between (depth - stroke) and depth, so the whole motion would
+        // otherwise slide forward with the depth.
+        if (keepStrokeStart && depthSent && !strokeSent)
+        {
+            const float anchored = depth - (state.depth - state.stroke);
+            // A depth below the old near endpoint cannot hold that endpoint, so
+            // fall back to the normal behaviour instead of collapsing the stroke
+            // to zero, which would stop the machine without saying why.
+            if (anchored > 0.0f)
+            {
+                stroke = anchored;
+            }
+        }
+
+        // Consistency guard. The engine confines the sweep to [0, usable] and
+        // clamps silently, so keep both values inside that range here. Otherwise
+        // a slider position and the machine would disagree.
+        const float usable = strokeUsableTravelMm;
+        depth = constrain(depth, 0.0f, usable);
+        stroke = constrain(stroke, 0.0f, depth);
+
+        if (run == state.run && home == state.home && keepStrokeStart == state.keepStrokeStart &&
+            speed == state.speed && depth == state.depth &&
             stroke == state.stroke && sensation == state.sensation && pattern == state.pattern)
         {
             return StateUpdateResult::UNCHANGED;
@@ -85,6 +126,7 @@ public:
 
         state.run = run;
         state.home = home;
+        state.keepStrokeStart = keepStrokeStart;
         state.speed = speed;
         state.depth = depth;
         state.stroke = stroke;
