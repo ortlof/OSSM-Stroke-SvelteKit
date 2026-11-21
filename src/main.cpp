@@ -170,6 +170,7 @@ static void loadSettings()
     strokeStateService.update([&](StrokeState &state)
                               {
         state.physicalTravel = settings.physical_travel;
+        state.usableTravel = settings.physical_travel - (2.0f * settings.keepout);
         state.speed = clampSpeedMmPerSecond(state.speed);
         return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
 }
@@ -258,6 +259,18 @@ static void applyStrokeStateToEngine(const String &originId)
 
     if (command.run)
     {
+        // A stroke of zero is a valid command for the engine and it moves
+        // nowhere. Refuse it instead of leaving the user with a dead button.
+        if (command.stroke <= 0.0f)
+        {
+            esp32sveltekit.getNotificationService()->pushNotification("Set a stroke length first", PUSHWARNING);
+            strokeStateService.update([](StrokeState &state)
+                                      {
+                state.run = false;
+                return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
+            return;
+        }
+
         if (!Stroker.startPattern())
         {
             esp32sveltekit.getNotificationService()->pushNotification("Pattern could not be started", PUSHERROR);
@@ -287,10 +300,16 @@ void syncStrokeStateTask(void *pvParameters)
                 strokingMachine.physicalTravel = Stroker.getPhysicalTravel();
             }
 
+            // The engine confines depth and stroke to the travel minus both
+            // keepout zones. Offer the same range to the browser, otherwise the
+            // engine silently clamps what the sliders send.
+            float usable = strokingMachine.physicalTravel - (2.0f * strokingMachine.keepoutBoundary);
+
             strokeStateService.update([&](StrokeState &state)
                                       {
                 state.homed = success;
                 state.physicalTravel = strokingMachine.physicalTravel;
+                state.usableTravel = usable;
                 return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
 
             esp32sveltekit.getNotificationService()->pushNotification(
@@ -312,6 +331,7 @@ void syncStrokeStateTask(void *pvParameters)
         float stepsPerMm = (servoMotor.stepsPerMillimeter > 0.0f) ? servoMotor.stepsPerMillimeter : 1.0f;
         float positionMm = roundf(float(stepperDriver.getCurrentPosition()) / stepsPerMm * 10.0f) / 10.0f;
         float travel = strokingMachine.physicalTravel;
+        float usable = travel - (2.0f * strokingMachine.keepoutBoundary);
 
         strokeStateService.update([&](StrokeState &state)
                                   {
@@ -322,6 +342,7 @@ void syncStrokeStateTask(void *pvParameters)
             if (state.clipping != clipping) { state.clipping = clipping; changed = true; }
             if (fabsf(state.position - positionMm) >= 0.05f) { state.position = positionMm; changed = true; }
             if (fabsf(state.physicalTravel - travel) >= 0.05f) { state.physicalTravel = travel; changed = true; }
+            if (fabsf(state.usableTravel - usable) >= 0.05f) { state.usableTravel = usable; changed = true; }
 
             String name = Stroker.getPatternName(state.pattern);
             if (state.patternName != name) { state.patternName = name; changed = true; }

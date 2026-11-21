@@ -43,11 +43,14 @@
 		homed: false,
 		position: 0,
 		physical_travel: 450,
+		usable_travel: 420,
 		clipping: false
 	});
 
 	let patterns: string[] = $state([]);
-	let travel = $derived(state.physical_travel > 0 ? state.physical_travel : 450);
+	// The engine confines depth and stroke to the travel minus both keepout
+	// zones, so the sliders use that range, not the full measured travel.
+	let travel = $derived(state.usable_travel > 0 ? state.usable_travel : 420);
 
 	function authHeader() {
 		return {
@@ -118,7 +121,7 @@
 			<div class="stat">
 				<div class="stat-title">Position</div>
 				<div class="stat-value text-2xl">{state.position.toFixed(1)} mm</div>
-				<div class="stat-desc">travel {travel.toFixed(0)} mm</div>
+				<div class="stat-desc">usable travel {travel.toFixed(0)} mm</div>
 			</div>
 			<div class="stat">
 				<div class="stat-title">Pattern</div>

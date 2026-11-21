@@ -42,7 +42,8 @@ public:
     String patternName = "";
     bool homed = false;
     float position = 0.0f;         // current position in mm
-    float physicalTravel = 0.0f;   // usable travel in mm, updated after homing
+    float physicalTravel = 0.0f;   // measured travel in mm between the hard stops
+    float usableTravel = 0.0f;     // physicalTravel minus both keepout zones, the real range
     bool clipping = false;         // engine had to clip a commanded motion
 
     static void read(StrokeState &state, JsonObject &root)
@@ -60,6 +61,7 @@ public:
         root["homed"] = state.homed;
         root["position"] = state.position;
         root["physical_travel"] = state.physicalTravel;
+        root["usable_travel"] = state.usableTravel;
         root["clipping"] = state.clipping;
     }
 
