@@ -367,13 +367,26 @@ impl OverlayApp {
 
         // Reserve the label row above the sliders and the slim selector row
         // below, so the sliders can never push that row off the panel.
-        let h = (ui.available_height() - 2.0 * (SETUP_SIZE + GAP) - 24.0).max(70.0);
-        let w = ((ui.available_width() - GAP * 3.0) / 4.0).floor().max(48.0);
+        let L = self.config.layout.clone();
+        let gap = L.gap;
+        let btn = L.button_size;
+        let h = if L.slider_height > 1.0 {
+            L.slider_height
+        } else {
+            (ui.available_height() - 2.0 * (btn + gap) - 24.0).max(70.0)
+        };
+        let w = if L.slider_width > 1.0 {
+            L.slider_width
+        } else {
+            ((ui.available_width() - gap * 3.0) / 4.0).floor().max(48.0)
+        };
+        let THUMB = L.thumb_height;
+        let CAPS = L.cap_size;
 
         let mut patch = serde_json::Map::new();
-        let pad = ((w - SETUP_SIZE) * 0.5).max(0.0);
+        let pad = ((w - btn) * 0.5).max(0.0);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = GAP;
+            ui.spacing_mut().item_spacing.x = gap;
             for col in 0..4usize {
                 ui.vertical(|ui| {
                     // Each column owns its own controls: column 1 carries Start and
@@ -393,29 +406,29 @@ impl OverlayApp {
                             });
                         }
                         _ => {
-                            ui.add_space(SETUP_SIZE);
+                            ui.add_space(btn);
                         }
                     }
                     ui.add_space(GAP);
                     match col {
                         0 => {
-                            if v_slider(ui, &mut self.speed, &mut self.speed_active, 1.0, limit, 1.0, "SPEED", w, h) {
+                            if v_slider(ui, &mut self.speed, &mut self.speed_active, 1.0, limit, 1.0, "SPEED", w, h, THUMB, CAPS, L.label_font) {
                                 patch.insert("speed".into(), serde_json::Value::from(self.speed));
                             }
                         }
                         1 => {
-                            if v_slider(ui, &mut self.depth, &mut self.depth_active, 0.0, travel, 5.0, "DEPTH", w, h) {
+                            if v_slider(ui, &mut self.depth, &mut self.depth_active, 0.0, travel, 5.0, "DEPTH", w, h, THUMB, CAPS, L.label_font) {
                                 patch.insert("depth".into(), serde_json::Value::from(self.depth));
                             }
                         }
                         2 => {
-                            if v_slider(ui, &mut self.stroke, &mut self.stroke_active, 0.0, stroke_max, 5.0, "STROKE", w, h) {
+                            if v_slider(ui, &mut self.stroke, &mut self.stroke_active, 0.0, stroke_max, 5.0, "STROKE", w, h, THUMB, CAPS, L.label_font) {
                                 patch.insert("stroke".into(), serde_json::Value::from(self.stroke));
                             }
                         }
                         _ => {
                             // Sensation is bipolar (-100 .. 100), same widget.
-                            if v_slider(ui, &mut self.sensation, &mut self.sensation_active, -100.0, 100.0, 5.0, "SENSATION", w, h) {
+                            if v_slider(ui, &mut self.sensation, &mut self.sensation_active, -100.0, 100.0, 5.0, "SENSATION", w, h, THUMB, CAPS, L.label_font) {
                                 patch.insert("sensation".into(), serde_json::Value::from(self.sensation));
                             }
                         }
@@ -435,7 +448,7 @@ impl OverlayApp {
                             });
                         }
                         _ => {
-                            ui.add_space(SETUP_SIZE);
+                            ui.add_space(btn);
                         }
                     }
                 });
@@ -680,6 +693,9 @@ fn v_slider(
     label: &str,
     width: f32,
     height: f32,
+    thumb_h: f32,
+    cap: f32,
+    label_font: f32,
 ) -> bool {
     let mut sent = false;
     ui.vertical(|ui| {
@@ -701,8 +717,8 @@ fn v_slider(
         const LABEL_COL: f32 = 13.0;
         let rail_w = ((rect.width() - LABEL_COL) * 0.62).clamp(16.0, 26.0);
         // Two nudge caps: one step per press, for fine work at a distance.
-        const CAP: f32 = 15.0;
-        let inner_h = (rect.height() - 2.0 * (CAP + 3.0)).max(50.0);
+        let CAP: f32 = cap;
+        let inner_h = (rect.height() - 2.0 * (CAP + 3.0)).max(24.0);
         let cx = rect.center().x + LABEL_COL * 0.5;
         let rail = Rect::from_center_size(egui::pos2(cx, rect.center().y), egui::vec2(rail_w, inner_h));
         let up_rect = Rect::from_center_size(
@@ -741,7 +757,7 @@ fn v_slider(
         }
         let lgalley = ui.painter().layout_no_wrap(
             label.to_owned(),
-            FontId::proportional(10.0),
+            FontId::proportional(label_font),
             label_c(),
         );
         let lpos = egui::pos2(
@@ -756,8 +772,8 @@ fn v_slider(
 
         // The thumb travels between the rail ends, so map the pointer over that
         // same range and the thumb always lands under it.
-        let travel_top = rail.top() + THUMB_H * 0.6;
-        let travel_bot = rail.bottom() - THUMB_H * 0.6;
+        let travel_top = rail.top() + thumb_h * 0.6;
+        let travel_bot = rail.bottom() - thumb_h * 0.6;
         let span = (travel_bot - travel_top).max(1.0);
 
         if (resp.dragged() || resp.clicked()) && max > min {
@@ -785,7 +801,7 @@ fn v_slider(
         // rather than a fat block on a thin stick.
         let thumb = Rect::from_center_size(
             egui::pos2(rect.center().x, thumb_y),
-            egui::vec2(rail_w, THUMB_H * 2.1),
+            egui::vec2(rail_w, thumb_h * 2.1),
         );
         let hot = resp.hovered() || resp.dragged();
         painter.rect_filled(thumb, CornerRadius::same(11), if hot { thumb_hot_c() } else { thumb_c() });

@@ -34,7 +34,43 @@ pub struct Config {
     /// video or VR window readable behind the controls while the text stays
     /// legible.
     pub panel_alpha: u8,
+    pub layout: Layout,
 }
+/// Geometry, so the panel can be tuned without a rebuild. Every value is in points;
+/// the interface is drawn at these sizes and then scaled to the window.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct Layout {
+    /// 0 = work it out from the window width.
+    pub slider_width: f32,
+    /// 0 = fill the height left over after the buttons.
+    pub slider_height: f32,
+    /// Height of the handle block on a rail.
+    pub thumb_height: f32,
+    /// Size of the small square buttons and the nudge caps.
+    pub button_size: f32,
+    /// Size of the up and down nudge caps at the ends of a rail.
+    pub cap_size: f32,
+    /// Space between the four columns.
+    pub gap: f32,
+    /// Face size of the vertical slider labels.
+    pub label_font: f32,
+}
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            slider_width: 0.0,
+            slider_height: 0.0,
+            thumb_height: 34.0,
+            button_size: 32.0,
+            cap_size: 15.0,
+            gap: 10.0,
+            label_font: 10.0,
+        }
+    }
+}
+
 
 impl Default for Config {
     fn default() -> Self {
@@ -49,6 +85,7 @@ impl Default for Config {
             window_width: 240.0,
             window_height: 480.0,
             panel_alpha: 3,   // about 99 percent transparent: the view behind stays clear
+            layout: Layout::default(),
         }
     }
 }

@@ -36,3 +36,15 @@ window_height = 480.0
 
 # Panel opacity, 0 invisible .. 255 solid. Lower it for VR.
 panel_alpha = 3
+
+# --- geometry, for debugging layout without a rebuild -------------------------
+# The panel is drawn at these sizes, then scaled to the window. Edit while the HUD
+# runs: the file is re-read every couple of seconds.
+[layout]
+slider_width = 0.0     # 0 = work it out from the window width
+slider_height = 0.0    # 0 = fill the height left after the buttons
+thumb_height = 34.0    # height of the handle block on a rail
+button_size = 32.0     # the small square buttons
+cap_size = 15.0        # the up/down nudge caps at the ends of a rail
+gap = 10.0             # space between the four columns
+label_font = 10.0      # face size of the vertical labels
