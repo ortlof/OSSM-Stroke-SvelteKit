@@ -284,8 +284,8 @@ impl OverlayApp {
 
     /// One button, taller than a normal one, that starts and stops.
     fn big_button(&mut self, ui: &mut egui::Ui) {
-        let w = ui.available_width();
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, BUTTON_H), Sense::click());
+        // A small square like the depth-setup button: icon only, no word.
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(SETUP_SIZE, SETUP_SIZE), Sense::click());
         let running = self.snapshot.state.run;
         let homed = self.snapshot.state.homed;
         let connected = self.snapshot.connected;
@@ -299,17 +299,27 @@ impl OverlayApp {
             start_fill()
         };
         let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::same(12), fill);
+        painter.rect_filled(rect, CornerRadius::same(8), fill);
         if resp.hovered() && can_act {
-            painter.rect_filled(rect, CornerRadius::same(12), Color32::from_white_alpha(20));
+            painter.rect_filled(rect, CornerRadius::same(8), Color32::from_white_alpha(24));
         }
-        painter.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            if running { "STOP" } else { "START" },
-            FontId::proportional(22.0),
-            Color32::from_rgb(242, 244, 252),
-        );
+        let ink = Color32::from_rgb(242, 244, 252);
+        let c = rect.center();
+        if running {
+            let r = Rect::from_center_size(c, egui::vec2(SETUP_SIZE * 0.34, SETUP_SIZE * 0.34));
+            painter.rect_filled(r, CornerRadius::same(2), ink);
+        } else {
+            let t = SETUP_SIZE * 0.28;
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    egui::pos2(c.x - t * 0.7, c.y - t),
+                    egui::pos2(c.x - t * 0.7, c.y + t),
+                    egui::pos2(c.x + t, c.y),
+                ],
+                ink,
+                egui::Stroke::NONE,
+            ));
+        }
 
         let dot_color = if !connected {
             ERR
@@ -318,7 +328,7 @@ impl OverlayApp {
         } else {
             WARN
         };
-        let dot = egui::pos2(rect.left() + 16.0, rect.center().y);
+        let dot = egui::pos2(rect.right() + 12.0, rect.center().y);
         painter.circle_filled(dot, 7.0, Color32::from_rgba_unmultiplied(10, 12, 16, 150));
         painter.circle_filled(dot, 5.0, dot_color);
 
@@ -410,11 +420,8 @@ impl OverlayApp {
             visuals.widgets.active.weak_bg_fill = combo_hot();
             visuals.window_fill = Color32::from_rgba_unmultiplied(16, 18, 24, 246);
 
-            label_pill(ui, "PATTERN", 12.5);
-
-            // The square button goes at the end of the row; give the combo the
-            // rest and never let it overlap the button.
-            let combo_w = (ui.available_width() - SETUP_SIZE - GAP).max(60.0);
+            // No label: the pattern name in the box says what it is.
+            let combo_w = (ui.available_width() - 2.0 * SETUP_SIZE - 2.0 * GAP).max(60.0);
             egui::ComboBox::from_id_salt("pattern")
                 .width(combo_w)
                 .selected_text(selected)
@@ -425,6 +432,7 @@ impl OverlayApp {
                 });
 
             self.setup_button(ui);
+            self.keep_start_button(ui);
         });
 
         if chosen != self.pattern {
@@ -439,6 +447,30 @@ impl OverlayApp {
     /// *does* move the machine; the tooltip says so. It lights up amber while
     /// `state.setup != 0`, and it is a glyph rather than a word so it stays
     /// small and can never be read as Start/Stop.
+    fn keep_start_button(&mut self, ui: &mut egui::Ui) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static ON: AtomicBool = AtomicBool::new(false);
+        let on = ON.load(Ordering::Relaxed);
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(SETUP_SIZE, SETUP_SIZE), Sense::click());
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(8),
+            if on { Color32::from_rgba_unmultiplied(206, 209, 216, 105) } else { combo_fill() });
+        let ink = if on { Color32::from_rgb(18, 20, 26) } else { Color32::from_rgb(226, 230, 244) };
+        let c = rect.center();
+        let t = SETUP_SIZE * 0.26;
+        // a bar with a stem: the stroke start is pinned
+        painter.line_segment([egui::pos2(c.x - t, c.y - t * 0.8), egui::pos2(c.x + t, c.y - t * 0.8)],
+                             egui::Stroke::new(2.0, ink));
+        painter.line_segment([egui::pos2(c.x, c.y - t * 0.8), egui::pos2(c.x, c.y + t)],
+                             egui::Stroke::new(2.0, ink));
+        if resp.clicked() {
+            ON.store(!on, Ordering::Relaxed);
+            self.send_state(serde_json::json!({ "keep_stroke_start": !on }));
+        }
+        resp.on_hover_text(if on { "stroke start is pinned - click to release" }
+                           else { "pin the stroke start" });
+    }
+
     fn setup_button(&mut self, ui: &mut egui::Ui) {
         let connected = self.snapshot.connected;
         let active = self.snapshot.state.setup != 0;
@@ -511,10 +543,14 @@ impl eframe::App for OverlayApp {
         // Responsive: the panel is laid out in DESIGN points and scaled to whatever
         // size the window is, so resizing keeps it proportionate and legible instead
         // of clipping or stranding small text.
+        // Scaling zooms the whole UI, which changes content_rect, which changes the
+        // zoom: without a dead band that is a feedback loop and the panel jitters.
+        // Only rescale when the size has genuinely changed by more than 12 percent.
         const DESIGN_W: f32 = 380.0;
-        let win_w = ctx.content_rect().width().max(1.0);
+        let cur = ctx.zoom_factor();
+        let win_w = ctx.content_rect().width().max(1.0) * cur;
         let want_zoom = (win_w / DESIGN_W).clamp(0.6, 2.5);
-        if (ctx.zoom_factor() - want_zoom).abs() > 0.01 {
+        if (cur - want_zoom).abs() > 0.12 * cur {
             ctx.set_zoom_factor(want_zoom);
         }
 
@@ -570,7 +606,7 @@ fn v_slider(
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click_and_drag());
         *active = resp.dragged() || resp.is_pointer_button_down_on();
 
-        let rail_w = (rect.width() * 0.72).max(24.0);
+        let rail_w = (rect.width() * 0.33).max(14.0);
         let rail = Rect::from_center_size(rect.center(), egui::vec2(rail_w, rect.height()));
         let radius = CornerRadius::same((rail_w / 2.0).round().clamp(0.0, 255.0) as u8);
 
