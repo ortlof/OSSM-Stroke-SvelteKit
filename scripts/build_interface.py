@@ -17,6 +17,7 @@ from pathlib import Path
 from shutil import copytree, rmtree, copyfileobj
 from os.path import exists, getmtime
 import os
+import subprocess
 import sys
 import gzip
 import mimetypes
@@ -86,12 +87,25 @@ def get_package_manager():
         return "npm"
 
 
+def run_checked(command):
+    """Run a build command and fail the whole build when it fails.
+
+    env.Execute() does not stop the firmware build when the front end fails, so a
+    broken Svelte file was replaced by the previous bundle without a word and the
+    old UI went into the firmware. That cost an afternoon once; never again.
+    """
+    print(f"running: {command}")
+    result = subprocess.run(command, shell=True)
+    if result.returncode != 0:
+        raise SystemExit(f"front end build step failed with {result.returncode}: {command}")
+
+
 def build_webapp():
     package_manager = get_package_manager()
     print(f"Building interface with {package_manager}")
     os.chdir(interface_dir)
-    env.Execute(f"{package_manager} install")
-    env.Execute(f"{package_manager} run build")
+    run_checked(f"{package_manager} install")
+    run_checked(f"{package_manager} run build")
     os.chdir("..")
 
 

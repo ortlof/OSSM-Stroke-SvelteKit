@@ -184,9 +184,7 @@
 		{#if state.setup !== 0}
 			<div class="alert alert-warning my-2 shadow-lg">
 				<span>
-					Setup mode {state.setup === 2 ? 'fancy: move the Sensation slider to walk between depth minus
-					stroke and depth' : 'depth: move the Depth slider to drive the machine'} at 10 mm/s. Press the
-					button again, or press Start, to leave the mode.
+					Setup mode {state.setup === 2 ? 'fancy: the Sensation slider walks between depth minus stroke and depth' : 'depth: the Depth slider drives the machine'} at 10 mm/s. Press the button again, or press Start, to leave.
 				</span>
 			</div>
 		{/if}

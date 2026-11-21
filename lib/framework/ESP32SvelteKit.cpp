@@ -92,7 +92,15 @@ void ESP32SvelteKit::begin()
                 response.setCode(200);
                 response.setContentType(contentType.c_str());
                 response.addHeader("Content-Encoding", "gzip");
+                // The asset names carry no content hash, so an immutable one year
+                // cache hides every front end update behind a hard refresh. With
+                // WWW_NO_CACHE the browser revalidates instead and a normal reload
+                // picks up a new UI after an OTA.
+#ifdef WWW_NO_CACHE
+                response.addHeader("Cache-Control", "no-cache");
+#else
                 response.addHeader("Cache-Control", "public, immutable, max-age=31536000");
+#endif
                 response.setContent(content, len);
                 return response.send();
             };
