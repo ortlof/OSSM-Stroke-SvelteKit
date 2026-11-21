@@ -376,6 +376,14 @@ void ModbusProbeService::runRangeRead(int reg, int count)
     uint8_t exc = 0;
 
     uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, (uint16_t)reg, (uint16_t)count, (uint8_t)func);
+    // Discard anything left in the receive buffer before asking, so what we parse
+    // is the reply to THIS request. Without it a moving machine leaves stale frames
+    // behind and a read silently returns the previous answer - which reads as a
+    // plausible number and is the worst kind of wrong.
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
     Serial2.write(request, reqLen);
     Serial2.flush();
 
@@ -452,6 +460,14 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
 
     // --- forward, 0x01FE ---
     uint8_t reqLen = modbus_rtu::buildWriteRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_FORWARD, (uint16_t)forwardRaw);
+    // Discard anything left in the receive buffer before asking, so what we parse
+    // is the reply to THIS request. Without it a moving machine leaves stale frames
+    // behind and a read silently returns the previous answer - which reads as a
+    // plausible number and is the worst kind of wrong.
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
     Serial2.write(request, reqLen);
     Serial2.flush();
     size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
@@ -461,6 +477,14 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
     // --- reverse, 0x01FF ---
     exc = 0;
     reqLen = modbus_rtu::buildWriteRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_REVERSE, (uint16_t)reverseRaw);
+    // Discard anything left in the receive buffer before asking, so what we parse
+    // is the reply to THIS request. Without it a moving machine leaves stale frames
+    // behind and a read silently returns the previous answer - which reads as a
+    // plausible number and is the worst kind of wrong.
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
     Serial2.write(request, reqLen);
     Serial2.flush();
     got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
@@ -472,6 +496,14 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
     int rread = -1;
     exc = 0;
     reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_FORWARD, 2);
+    // Discard anything left in the receive buffer before asking, so what we parse
+    // is the reply to THIS request. Without it a moving machine leaves stale frames
+    // behind and a read silently returns the previous answer - which reads as a
+    // plausible number and is the worst kind of wrong.
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
     Serial2.write(request, reqLen);
     Serial2.flush();
     got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
@@ -523,6 +555,14 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm, 
     // The position monitors are 32-bit values served as two registers, high word
     // first. Reading one register would wrap every 327 mm of travel.
     uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, (uint16_t)positionRegister, 2);
+    // Discard anything left in the receive buffer before asking, so what we parse
+    // is the reply to THIS request. Without it a moving machine leaves stale frames
+    // behind and a read silently returns the previous answer - which reads as a
+    // plausible number and is the worst kind of wrong.
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
     Serial2.write(request, reqLen);
     Serial2.flush();
 
