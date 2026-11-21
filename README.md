@@ -35,7 +35,27 @@ pio run -e esp32dev -t upload    # flash over USB
 pio run -e esp32dev -t erase     # one-time wipe when coming from the EEPROM firmware
 ```
 
-### Update over the network
+## Machine values for a rack-and-pinion build
+
+`StrokeSettings` (or `/rest/strokeSettings`) carries the motion scale. For the
+owner's build — 20:1 planetary gearbox on a module 2 pinion, 30 teeth, driving a
+module 2 rack — the numbers are:
+
+```
+rack travel per motor revolution = pi * (30 * 2) / 20 = 9.425 mm
+servo DIP switches SW1 off, SW2-SW6 on  ->  800 pulses/rev
+steps_per_mm = 800 / 9.425 = 84.88
+```
+
+The default 78.64 comes from the belt-driven OSSM reference machine and makes
+every commanded millimetre only 92.6 % of a real millimetre. A change to
+`steps_per_mm` needs a device restart: the motion driver is created from it at
+boot. The value persists on LittleFS and survives an OTA.
+
+Full derivation, torque, backlash and the ruler check: see the Hermes skill
+`ossm-stroke-firmware` → `references/machine-build.md`.
+
+## Update over the network
 
 This firmware contains no espota/ArduinoOTA, so an update goes through the
 device itself, the same way the browser does it on the System -> Update page:
