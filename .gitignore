@@ -1,0 +1,25 @@
+# --- PlatformIO build output ---
+.pio/
+build/
+
+# front end embedded into the firmware, rebuilt by scripts/build_interface.py
+lib/framework/WWWData.h
+
+# SSL root store, rebuilt by scripts/generate_cert_bundle.py
+src/certs/
+
+# LittleFS image directory (only used without -D EMBED_WWW)
+data/
+
+# --- front end ---
+interface/node_modules/
+interface/build/
+interface/.svelte-kit/
+
+# --- editors / OS ---
+.vscode/
+.DS_Store
+
+# --- python caches from the pre-build scripts ---
+__pycache__/
+*.pyc
