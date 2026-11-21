@@ -31,6 +31,12 @@
 		clipping: boolean;
 	}
 
+	interface StrokeTuning {
+		max_speed: number;
+		user_speed_limit: number;
+		reversal_acceleration_factor: number;
+	}
+
 	interface PatternList {
 		count: number;
 		names: string[];
@@ -57,6 +63,7 @@
 	});
 
 	let patterns: string[] = $state([]);
+	let tuning: StrokeTuning = $state({ max_speed: 700, user_speed_limit: 650, reversal_acceleration_factor: 0.7 });
 	// The engine confines depth and stroke to the travel minus both keepout
 	// zones, so the sliders use that range, not the full measured travel.
 	let travel = $derived(state.usable_travel > 0 ? state.usable_travel : 420);
@@ -94,8 +101,47 @@
 		}
 	}
 
+	async function loadTuning() {
+		try {
+			const response = await fetch('/rest/strokeSettings', { headers: authHeader() });
+			if (response.ok) {
+				const all = await response.json();
+				tuning = {
+					max_speed: all.max_speed,
+					user_speed_limit: all.user_speed_limit,
+					reversal_acceleration_factor: all.reversal_acceleration_factor
+				};
+			}
+		} catch (error) {
+			console.error('Error:', error);
+		}
+	}
+
+	async function saveTuning(patch: Partial<StrokeTuning>) {
+		try {
+			const response = await fetch('/rest/strokeSettings', {
+				method: 'POST',
+				headers: authHeader(),
+				body: JSON.stringify(patch)
+			});
+			if (response.ok) {
+				const all = await response.json();
+				tuning = {
+					max_speed: all.max_speed,
+					user_speed_limit: all.user_speed_limit,
+					reversal_acceleration_factor: all.reversal_acceleration_factor
+				};
+			} else {
+				notifications.error('Setting rejected (' + response.status + ')', 3000);
+			}
+		} catch (error) {
+			console.error('Error:', error);
+		}
+	}
+
 	onMount(() => {
 		loadState();
+		loadTuning();
 		// live telemetry, pushed by the engine synchronisation task
 		socket.on<StrokeState>('stroke', (data) => {
 			state = data;
@@ -280,6 +326,64 @@
 						<option value={index}>{name}</option>
 					{/each}
 				</select>
+			</div>
+		</div>
+
+		<div class="divider">Tuning</div>
+
+		<div class="grid grid-cols-1 gap-x-8 gap-y-2 md:grid-cols-2">
+			<div class="fieldset">
+				<label class="label" for="rev">Reversal acceleration factor ({tuning.reversal_acceleration_factor.toFixed(2)})</label>
+				<input
+					id="rev"
+					type="range"
+					class="range range-secondary"
+					min="0.05"
+					max="1"
+					step="0.05"
+					bind:value={tuning.reversal_acceleration_factor}
+					onchange={() => saveTuning({ reversal_acceleration_factor: tuning.reversal_acceleration_factor })}
+				/>
+				<div class="label">
+					Every stroke reverses, so this factor decides how much acceleration a turnaround gets. Higher is
+					faster and louder; the gearbox backlash is what the low default protects.
+				</div>
+			</div>
+
+			<div class="fieldset">
+				<label class="label" for="limit">Speed limit for this slider ({tuning.user_speed_limit.toFixed(0)} mm/s)</label>
+				<input
+					id="limit"
+					type="range"
+					class="range range-secondary"
+					min="50"
+					max="700"
+					step="10"
+					bind:value={tuning.user_speed_limit}
+					onchange={() => saveTuning({ user_speed_limit: tuning.user_speed_limit })}
+				/>
+				<div class="label">
+					The highest value the Speed slider can reach. The measured peak stays below it, more so with a
+					short stroke: about 100 % at 200 mm, 78 % at 60 mm.
+				</div>
+			</div>
+
+			<div class="fieldset">
+				<label class="label" for="maxspeed">Hard ceiling ({tuning.max_speed.toFixed(0)} mm/s)</label>
+				<input
+					id="maxspeed"
+					type="range"
+					class="range range-secondary"
+					min="100"
+					max="800"
+					step="10"
+					bind:value={tuning.max_speed}
+					onchange={() => saveTuning({ max_speed: tuning.max_speed })}
+				/>
+				<div class="label">
+					The engine refuses to plan faster than this. It is read when the motion driver is built, so a
+					change needs a restart. 650 mm/s is about 4150 rpm at the motor.
+				</div>
 			</div>
 		</div>
 	</div>
