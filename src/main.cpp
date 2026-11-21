@@ -22,6 +22,7 @@
 
 #include "OSSM_Config.h"
 #include "OSSM_PinDEF.h"
+#include "ModbusProbeService.h"
 #include "StrokeSettingsService.h"
 #include "StrokeStateService.h"
 
@@ -37,6 +38,7 @@ ESP32SvelteKit esp32sveltekit(&server, NUMBER_OF_ENDPOINTS);
 
 StrokeSettingsService strokeSettingsService(&server, &esp32sveltekit);
 StrokeStateService strokeStateService(&server, &esp32sveltekit);
+ModbusProbeService modbusProbeService(&server, &esp32sveltekit);
 
 // ---------------------------------------------------------------------------
 // Motion
@@ -532,6 +534,7 @@ void setup()
     esp32sveltekit.begin();
     strokeSettingsService.begin();
     strokeStateService.begin();
+    modbusProbeService.begin();
 
     // --- board ---
     pinMode(SERVO_ALM_PIN, INPUT);
