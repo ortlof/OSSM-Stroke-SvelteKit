@@ -101,6 +101,50 @@ rather than re-deriving.
   N and kgf, a swap switch, and the drive's read-back. Source
   `interface/src/routes/setup/`. The page never changes the limits mid-pattern.
 
+## Web UI on a phone — the four fixes, and the preview loop
+
+**`interface/src/app.css` carries a "Layout on a phone" block taken from the DTT
+trainer's interface.** Both projects are ESP32-SvelteKit forks and their
+`+layout.svelte` files are byte-identical, so the same four defects come with the
+framework. Without the block, measured on the Stroke page at 390 px: daisyUI's
+`.label` is `white-space: nowrap`, so the longest description was **1685 px wide
+inside a 358 px box** and every helper line was clipped mid-word at the screen edge.
+With the block the same label is 358 px and wraps to 90 px tall. The four rules:
+
+1. `.label { white-space: normal }` — daisyUI nowraps every label; there are 90 of
+   them across 12 pages and they are sentences, not form labels.
+2. `.fieldset, .grid > *, .flex-col > * { min-width: 0 }` — flex/grid children
+   default to `min-width: auto` and refuse to shrink below their content.
+3. `@media (min-width: 640px) { .stats.stats-vertical { grid-template-columns:
+   repeat(3, minmax(0, 1fr)) } }` — outranks the `sm:stats-horizontal` utility.
+   **Three, not the DTT's four**: both OSSM cards hold 3 stats, so one rule is
+   enough and `minmax(0, 1fr)` is what stops a stat pushing past the card edge.
+   The DTT needed two rules because its card holds four.
+4. `.toast { pointer-events: none } .toast > * { pointer-events: auto }` — the toast
+   host is a fixed corner box and daisyUI lets it eat taps, a dead zone on a phone.
+
+Verified over 390 / 700 / 1024 px on `/stroke` and `/setup`: `.label` computes
+`normal`, zero labels overflow their box, the widest label equals its parent width
+exactly, no page overflow, and the stats go 1 column (phone) to 3 (from 640 px) with
+zero overflow.
+
+**Fast UI loop, no firmware build: `scripts/ui-preview.py`** (copied from the DTT
+tree). It serves `interface/build` locally and proxies `/rest` to the device with a
+token it signs in for, and rewrites `security: false` into `/rest/features` so the
+front end does not draw a login over a working session.
+
+```sh
+cd interface && npm run build
+python3 scripts/ui-preview.py --device http://192.168.2.115 --user admin --password <pw> --port 8096
+# then open http://127.0.0.1:8096/stroke with a phone viewport
+```
+
+**Use port 8096, not 8095**: the DTT tree keeps a `ui-preview.py` running on 8095 and
+another on 8097, and hitting the wrong one serves the DTT front end (its title reads
+"DTT Trainer") under a login form — which looks exactly like the OSSM UI failing to
+authenticate. Check `ss -ltnp | grep 809` first. `/ws/events` is **not** proxied, so
+the page shows "Connection to device lost" toasts; that is the preview, not the device.
+
 ## Gotchas that cost real time
 
 - **OTA can return `http=507 Insufficient Storage`** when flash is full. The device then

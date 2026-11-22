@@ -20,3 +20,66 @@
     border-color: var(--color-gray-200, currentcolor);
   }
 }
+
+/*
+  Layout on a phone.
+
+  Taken from the DTT trainer's interface (its app.css, the "Layout on a phone"
+  block). Both projects are ESP32-SvelteKit forks and their +layout.svelte files are
+  byte-identical, so the same four problems come with the framework. Without these
+  rules a card grows as wide as its longest sentence and the right-hand column is
+  clipped on a phone.
+
+  1. daisyUI's .label is `white-space: nowrap`. That is right for a two-word form
+     label and wrong for every description in this interface: there are 90 of them
+     across 12 pages, and a line like "The near end of a sweep stays this far from
+     the home position, so a Stroke can never be as long as the Depth." forced onto
+     one line makes the whole card that wide.
+*/
+.label {
+  white-space: normal;
+}
+
+/*
+  2. Flex and grid children default to `min-width: auto`, so they refuse to shrink
+     below their content. That is the other half of the same problem: a wrapped label
+     still cannot get narrower than the widest unbreakable thing inside it.
+*/
+.fieldset,
+.grid > *,
+.flex-col > * {
+  min-width: 0;
+}
+
+/*
+  3. daisyUI's horizontal stats are one row that does not shrink, so the last stat is
+     clipped when the row is too tight. Both cards here carry THREE stats - "Servo
+     state / Position / Pattern" on the Stroke page, and the two drive limits plus
+     "Torque now" on Machine Setup - and three fit in a row from 640 px up, so one
+     rule is enough. `minmax(0, 1fr)` is the load-bearing part: without it a stat can
+     refuse to shrink and push past the card edge, which is the failure the DTT's
+     version hit. The DTT needs two rules (two across, then four) because its card
+     holds four stats.
+     The class on the element is the responsive variant (`sm:stats-horizontal`), so
+     this has to outrank that utility.
+*/
+@media (min-width: 640px) {
+  .stats.stats-vertical {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/*
+  4. The toast host is a fixed box in the corner and daisyUI gives it
+     `pointer-events: auto`, so its empty space eats every tap that lands there - on a
+     phone that is a dead zone over the page. Let taps through, and keep the toasts
+     themselves clickable.
+*/
+.toast {
+  pointer-events: none;
+}
+
+.toast > * {
+  pointer-events: auto;
+}
