@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 
 DEVICE = "192.168.2.115"
-MIN_MAX_ALLOC = 40000
+MIN_MAX_ALLOC = 50000
 
 
 def call(path, data=None, tok=None, timeout=20):

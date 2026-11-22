@@ -73,6 +73,16 @@ public:
     // when it is false, instead of offering a control that does nothing.
     bool usesSlowStart = false;
 
+    // --- operator-presence dead-man, written by the firmware in main.cpp ---
+    // True when the firmware stopped the motion because the operator's client
+    // went away. Cleared when the operator commands a run again. Visible in
+    // /rest/strokeState so a stop can always be explained.
+    bool safeStop = false;
+    // Connected WebSocket clients. This is the presence signal the dead-man
+    // uses: a browser or the HUD holds a socket while the operator is there,
+    // and the socket closes when they leave.
+    int wsClients = 0;
+
     // --- archive status, written by SessionUploadService ---
     // "off"      disabled in the settings, nothing will be sent
     // "idle"     enabled and connected-ready, no session open
@@ -123,6 +133,9 @@ public:
         root["sweep_start"] = (sweep > 0.0f) ? sweep : 0.0f;
         root["clipping"] = state.clipping;
         root["uses_slow_start"] = state.usesSlowStart;
+
+        root["safe_stop"] = state.safeStop;
+        root["ws_clients"] = state.wsClients;
 
         root["upload_state"] = state.uploadState;
         root["upload_session"] = state.uploadSession;

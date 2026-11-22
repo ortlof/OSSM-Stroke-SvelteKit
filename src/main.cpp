@@ -733,6 +733,88 @@ void speedCommandTask(void *pvParameters)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Operator-presence dead-man.
+//
+// If the operator's client goes away while the machine runs, the machine stops.
+// The presence signal is the WebSocket client count: a browser or the HUD holds
+// a socket while the operator is there, and the socket closes when they leave.
+// No heartbeat protocol is needed for that, and a client that freezes is dropped
+// by the socket's own ping handling.
+//
+// Two rules keep it from stopping work that should continue:
+//   - it arms only while the machine runs, and only if a client was present when
+//     that run started, so a script-driven run with no browser attached is never
+//     interrupted;
+//   - the count must stay zero for the whole grace period, so a page reload or a
+//     brief network blip does not stop the machine.
+//
+// What it stops is the same path the operator's own stop button uses: run set
+// false by an update whose origin is not the engine, so the command applier
+// picks it up and stops the motion. A stop is the safe direction on this axis -
+// the drive holds position at rest.
+#define DEADMAN_GRACE_MS 3000
+#define DEADMAN_TICK_MS 500
+
+void deadmanTask(void *pvParameters)
+{
+    bool seenClientThisRun = false;
+    bool prevRun = false;
+    uint32_t lastSeenMs = 0;
+    TickType_t lastWakeTime = xTaskGetTickCount();
+
+    for (;;)
+    {
+        const int clients = (int)esp32sveltekit.getSocket()->getConnectedClients();
+
+        bool run = false;
+        strokeStateService.read([&run](StrokeState &state)
+                                { run = state.run; });
+
+        if (clients > 0)
+        {
+            seenClientThisRun = true;
+            lastSeenMs = millis();
+        }
+
+        if (run && !prevRun)
+        {
+            // A new run. Only one that starts with a client attached can be
+            // interrupted by that client leaving.
+            seenClientThisRun = (clients > 0);
+            lastSeenMs = millis();
+        }
+        prevRun = run;
+
+        if (run && seenClientThisRun && clients == 0 &&
+            (millis() - lastSeenMs) > DEADMAN_GRACE_MS)
+        {
+            strokeStateService.update([](StrokeState &state)
+                                      {
+                if (!state.run) { return StateUpdateResult::UNCHANGED; }
+                state.run = false;
+                state.safeStop = true;
+                return StateUpdateResult::CHANGED; }, "watchdog");
+            esp32sveltekit.getNotificationService()->pushNotification(
+                "Stopped: the operator's client went away", PUSHWARNING);
+            Serial.println("dead-man: operator client gone, motion stopped");
+        }
+
+        // Publish presence, and clear the dead-man record as soon as a new run
+        // starts. Origin is the engine, so this telemetry can never stop or
+        // start anything.
+        strokeStateService.update([&](StrokeState &state)
+                                  {
+            bool changed = false;
+            if (state.wsClients != clients) { state.wsClients = clients; changed = true; }
+            if (state.safeStop && state.run) { state.safeStop = false; changed = true; }
+            return changed ? StateUpdateResult::CHANGED : StateUpdateResult::UNCHANGED; },
+                                  STROKE_ENGINE_ORIGIN);
+
+        vTaskDelayUntil(&lastWakeTime, DEADMAN_TICK_MS / portTICK_PERIOD_MS);
+    }
+}
+
 // The pattern list is static, but the browser needs it for the drop down. It is
 // pushed as soon as a client subscribes to the "strokePatterns" event.
 void emitPatternList()
@@ -802,6 +884,8 @@ void setup()
     // WebSocket, and it reports the homing result.
     xTaskCreatePinnedToCore(syncStrokeStateTask, "strokeSync", 8192, NULL, 3, &strokeSyncHandle, 0);
     xTaskCreatePinnedToCore(speedCommandTask, "speedCommand", 3072, NULL, 4, &speedTaskHandle, 0);
+    // Below the motion tasks: this one must never compete with them for time.
+    xTaskCreatePinnedToCore(deadmanTask, "deadman", 3072, NULL, 2, NULL, 0);
 
     Serial.printf("OSSM-Stroke %s on %s ready\n", APP_VERSION, BUILD_TARGET);
 }
