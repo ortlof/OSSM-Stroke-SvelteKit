@@ -18,7 +18,8 @@ rather than re-deriving.
 | Deliverables | `/root/ossm-refactor/dist/`, served on `:8099` by the `ossm-dist` systemd unit |
 | Machine | `192.168.2.115` (LAN via Tailscale subnet route), login admin/admin |
 | Windows test box | `10.99.10.51`, user `buildwin`, key `~/.ssh/id_ed25519_win` |
-| Upstream patterns | `/root/ossm-refactor/LUST-motion` — `openlust/LUST-motion`, **public** (no token needed); its `lib/Pattern/` is the refactored pattern library |
+| Upstream patterns | `/root/ossm-refactor/LUST-motion` — `openlust/LUST-motion`, **public** (no token needed); its `lib/Pattern/` is the base of our pattern layer |
+| Upstream patterns | `/root/ossm-refactor/OSSM-Lite` — `fray-d/OSSM-Lite` (renamed from `fray-d/OSSM-hardware`); its `Software/lib/StrokeEngine/src/pattern.h` is the source of the last six patterns |
 
 ## Machine facts — measured, not assumed
 
@@ -95,13 +96,38 @@ rather than re-deriving.
 - In Rust, uppercase locals are **const patterns**: `let GAP = x;` fails with
   "refutable pattern in local binding". Bind lowercase.
 
-## Pattern library — ported from LUST-motion
+## Pattern library — 15 patterns from two upstreams
 
-`lib/StrokeEngine/src/` now holds the pattern layer that the LUST-motion refactor
-uses: `Pattern.h` (base) plus **one file per pattern** — `SimpleStroke.h`,
-`TeasingPounding.h`, `RoboStroke.h`, `HalfnHalf.h`, `Deeper.h`, `StopNGo.h`,
-`Insist.h`, `Knot.h`, `RandomDepth.h` — and `PatternLib.h` as the table.
-`PatternMath.h` is shared. The old single-file `pattern.h` is gone.
+`lib/StrokeEngine/src/` holds `Pattern.h` (base), **one file per pattern**, and
+`PatternLib.h` as the table. `PatternMath.h` is shared. The old single-file
+`pattern.h` is gone.
+
+Two sources, both ported onto the same contract:
+
+| Source | What it gave |
+| --- | --- |
+| `openlust/LUST-motion` (`lib/Pattern/`) | the layout, the mm/relative contract, `SimpleStroke` and `Knot` (ours, carried over), `RandomDepth` |
+| `fray-d/OSSM-hardware` → **renamed `fray-d/OSSM-Lite`** | `HalfnOut`, `ProgressiveStroke`, `KnotStroke`, `SlapStroke`, `RandomStroke`, `PointStroke` |
+
+**The fray-d URL in the notes is stale twice over: the repo was renamed to
+`OSSM-Lite`, and there is no `expirimental` branch.** The patterns are on `main`
+and `New-Protocols`; the other five branches (`OG`, `Enhanced-Homing`,
+`Fix/Streaming-logic`, `Fix/Not-Homed-Behavior`, `Feature/UserConfigService`)
+carry only the classic eight. Its base class is the *old* contract — `_speed` in
+steps/s, absolute step positions — so each pattern was translated;
+`Pattern::peakSpeedMmPerSecond()` is the value its `_speed` field held.
+
+The table (indices are stable; the last six were appended):
+
+| # | Name | Note |
+| --- | --- | --- |
+| 0–8 | Simple Stroke, Teasing or Pounding, Robo Stroke, Half'n'Half, Deeper, Stop'n'Go, Insist, Knot, RandomDepth | as before |
+| 9 | Half'n'Out | every second cycle pulls only half way out; the insertion is always full |
+| 10 | Progressive | the sweep walks in over a cycle in sensation-sized segments |
+| 11 | Knot Stroke | out, in to a sensation point, then a slow push to full depth — **a different pattern from Knot**, which stops short instead |
+| 12 | Slap | out at half speed, pause, then 90 % and 100 % hard |
+| 13 | Random Stroke | a random target at least a sensation-set distance from the last |
+| 14 | Point | park at one point inside the sweep |
 
 **The contract, and it is the point:** a pattern is handed the stroke LENGTH in mm
 and the full-stroke TIME in seconds, and answers with a position in **0..stroke, in
@@ -133,9 +159,24 @@ branch** — do not assume a fix is coming from there:
 | Deeper | printed on **every stroke** through `DEBUG_PATTERN`, which was the last debug switch still on. `String` building means malloc and float formatting on the motion task, 6 kB stack |
 | TeasingPounding | one `ESP_LOGV` per stroke on the motion path, removed with the rest of the debug IO |
 
-Teasing/Pounding and Half'n'Half at sensation +100 still ask above the machine's
-660 mm/s and 10000 mm/s²; the engine clips, so such a stroke takes longer than the
-commanded time. By design, not a fault.
+Teasing/Pounding, Half'n'Half and Half'n'Out at sensation +100 still ask above the
+machine's 660 mm/s and 10000 mm/s²; the engine clips, so such a stroke takes longer
+than the commanded time. By design, not a fault. Two more of the same kind, found
+by the harness and deliberately left as upstream wrote them: `RandomDepth` derives
+its acceleration from the full-stroke speed, so a short random insertion asks up to
+26 000 mm/s² (the fray-d `RandomStroke` computes it from the actual travel and does
+not), and `Progressive` at sensation −100 has a segment count of 2, where its cycle
+arithmetic degenerates into a jumpy sequence. It is sensible from about 5 segments
+up.
+
+**Knot was re-derived, not just ported.** It used fixed *speed* factors, so the
+creep ran at 2 % of the commanded speed (about 40 s for a 40 mm stroke at 20 mm/s)
+and the cycle time was unbounded. Its phases are now defined by *time shares* —
+0.75 + 0.75 + 2.5 half-strokes, i.e. a cycle is 2 commanded stroke times — and each
+phase derives its speed and acceleration from the standard 1/3-1/3-1/3 relations.
+The creep still dominates the cycle because it covers a short distance over the
+longest share. Measured after the change: the full cycle completes in ~12 s at
+20 mm/s and the creep runs at ~3.3 mm/s.
 
 Review and regression harness: `scripts/pattern-review/` in the `ossm-stroke-firmware`
 skill. It compiles the real pattern headers against Arduino stubs, mirrors
@@ -216,3 +257,11 @@ flash and the pattern table are verified; the carriage has not moved.
    Not yet done on hardware: the Stop'n'Go **boot** case, which needs a run within
    ~10 s of power-up because that is the window the old absolute-uptime gate closed.
    The host harness proves that one case at every uptime.
+10. **The six fray-d patterns and the re-derived Knot are motion-verified** (same
+   supervised setup, 20 mm/s, depth 60 / stroke 40). Knot: the full cycle now
+   completes in ~12 s and reaches the stop-short target 56.8 mm. Knot Stroke: 20 →
+   40 (the sensation point) → 60 in one cycle. Half'n'Out: in to 60 every time, out
+   to 40 then 20 on alternate cycles. Slap: out to 20, a ~5 s pause, then 90 % and
+   100 %. Random Stroke: targets vary every stroke. Point: parks at exactly 40.0 mm
+   (the middle) and holds. Progressive walks the sweep in segments. Nothing hit the
+   position limit and no fault was raised.
