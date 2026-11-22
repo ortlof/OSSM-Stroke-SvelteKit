@@ -78,6 +78,14 @@ rather than re-deriving.
 - **Two shapes**: shut `250 × 62` (power button + three-line opener), open **`250 × 800`**.
   Opens when the opener is hovered; shuts 400 ms after the pointer leaves, unless a
   slider is being dragged.
+- **The panel unfolds away from the nearer screen edge**, so it can be docked at the
+  foot of a screen: a strip in the lower half of the screen opens upward (bottom edge
+  fixed, top edge moves up), one in the top half opens downward (top edge fixed), which
+  is the behaviour it always had. The direction is latched when the panel opens, so
+  dragging the open panel across the middle does not flip it under the hand, and the
+  strip returns to where it was when the panel shuts. Measured: strip
+  (300,620)-(447,656) opens to (300,186)-(447,656); a strip at the screen foot,
+  (300,730)-(447,766), opens to (300,296)-(447,766), entirely on screen.
 - **Four columns own their buttons**: column 1 carries power (top) and the pattern menu
   (bottom); column 3 carries T / keep-start and the crosshair / depth-setup. Columns 2
   and 4 stay clear so the faders line up.

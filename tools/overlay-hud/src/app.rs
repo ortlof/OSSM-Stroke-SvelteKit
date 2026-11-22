@@ -138,6 +138,12 @@ pub struct OverlayApp {
     /// While the grip is being dragged on Windows: the offset from the pointer to
     /// the window's top-left corner. `None` when no drag of ours is running.
     grip_grab: Option<(i32, i32)>,
+    /// Whether the panel was open on the previous frame, to catch the moment it
+    /// opens.
+    expanded_before: bool,
+    /// True while the panel is anchored to its bottom edge, i.e. it unfolds upward
+    /// because the strip sits in the lower half of the screen.
+    expand_up: bool,
 }
 
 impl OverlayApp {
@@ -180,6 +186,8 @@ impl OverlayApp {
             last_config_check: Instant::now(),
             hwnd,
             grip_grab: None,
+            expanded_before: false,
+            expand_up: false,
         }
     }
 
@@ -724,14 +732,46 @@ impl eframe::App for OverlayApp {
         }
         EXPANDED.store(expanded, Ordering::Relaxed);
 
+        // Where the window is and how tall the monitor is. A strip in the lower half
+        // of the screen has no room under it, so the panel unfolds upward there: the
+        // bottom edge stays put and the top edge moves up. In the upper half it
+        // unfolds downward, top edge fixed, as it always did. The direction is
+        // latched when the panel opens, so dragging the open panel across the middle
+        // of the screen does not flip the window under the hand.
+        let (outer, monitor) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().monitor_size));
+        if expanded && !self.expanded_before {
+            self.expand_up = match (outer, monitor) {
+                (Some(r), Some(m)) if m.y > 1.0 => r.center().y > m.y * 0.5,
+                _ => false,
+            };
+        }
+        self.expanded_before = expanded;
+
         let want = if expanded {
             egui::vec2(OPEN_W, OPEN_H)
         } else {
             egui::vec2(SHUT_W, SHUT_H)
         };
+        let mut size_off = false;
         if let Some(sz) = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size())) {
-            if (sz.x - want.x).abs() > 2.0 || (sz.y - want.y).abs() > 2.0 {
+            size_off = (sz.x - want.x).abs() > 2.0 || (sz.y - want.y).abs() > 2.0;
+            if size_off {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(want));
+            }
+        }
+        // While the shape is changing, hold the anchoring edge: the bottom edge for a
+        // panel that unfolds upward, the top edge otherwise. Once the size has landed
+        // the computed top equals the current one and nothing is sent, so a drag (which
+        // sets the position itself) is never fought.
+        if size_off && self.grip_grab.is_none() {
+            if let Some(r) = outer {
+                let want_top = if self.expand_up { r.bottom() - want.y } else { r.top() };
+                if (r.top() - want_top).abs() > 1.0 {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                        r.left(),
+                        want_top,
+                    )));
+                }
             }
         }
 

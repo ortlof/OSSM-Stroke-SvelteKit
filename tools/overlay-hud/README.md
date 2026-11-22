@@ -29,8 +29,8 @@ cross build link with no mingw toolchain at all.
   It lights up amber while `state.setup != 0`. Its tooltip says plainly that it
   **moves the machine**: the machine creeps to the depth position at 10 mm/s and
   holds there so the operator can look at it.
-* **The value lives in the handle.** The number is printed inside the slider
-  handle, which removes the readout row the earlier design had.
+* **The value sits above the rail.** The number is printed above each rail, where it
+  can be read without covering anything, so the handle stays a plain grip.
 * **One status dot** inside the button: red = offline, yellow = connected but not
   homed, green = ready or running. No status text.
 * **Vertical on purpose.** A vertical slider can be made tall and fat without
@@ -40,6 +40,22 @@ cross build link with no mingw toolchain at all.
 Everything from the earlier design that is not needed at arm's length —
 keep-stroke-start, the tuning section, the readout row — still lives only in the
 browser page, which is the better place for it.
+
+## The two shapes
+
+Shut, the window is a 250 × 62 strip: the Start/Stop button and a three-line
+opener, nothing else. Hovering the opener opens the full 250 × 800 panel; the
+panel shuts again 400 ms after the pointer leaves it, unless a slider is being
+dragged. Click-through (`Ctrl+Shift+O`, or `overlay-hud --toggle-click-through`
+from another process) lets the pointer pass through the panel entirely.
+
+The panel unfolds away from the nearer screen edge, so the overlay can be docked
+at the foot of a screen: a strip in the lower half of the screen opens upward
+(its bottom edge stays where it is, the top edge moves up), and one in the top
+half opens downward (its top edge stays where it is). The direction is decided at
+the moment the panel opens, so dragging the open panel across the middle of the
+screen does not flip it under your hand, and the strip comes back to exactly where
+it was when the panel shuts.
 
 Every command is a `POST /rest/strokeState` with a subset body. The firmware
 clamps what it receives (speed to the slider limit, depth to usable travel minus
