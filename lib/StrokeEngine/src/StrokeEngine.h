@@ -242,6 +242,35 @@ class StrokeEngine {
 
         /**************************************************************************/
         /*!
+          @brief  Where the slow part of a pattern starts, as a percentage of the
+                  active stroke. A second parameter beside sensation, for the
+                  patterns that have a fast part and a slow part; those used to
+                  read it out of sensation, so one slider moved both.
+          @param percent 0..100. Patterns without a slow phase ignore it.
+          @param applyNow Set to true if changes should take effect immediately
+        */
+        /**************************************************************************/
+        void setSlowStart(float percent, bool applyNow);
+
+        /**************************************************************************/
+        /*!
+          @brief  Get the slow-start percentage.
+          @return The share of the active stroke at which the slow part begins.
+        */
+        /**************************************************************************/
+        float getSlowStart();
+
+        /**************************************************************************/
+        /*!
+          @brief  Whether the current pattern reads the slow-start parameter.
+          @return TRUE if setSlowStart() changes what the pattern does. Clients use
+                  this to hide the control instead of offering a dead slider.
+        */
+        /**************************************************************************/
+        bool patternUsesSlowStart();
+
+        /**************************************************************************/
+        /*!
           @brief  Choose a pattern for the StrokeEngine. Settings take effect with 
           next stroke, or after calling applyNewSettingsNow(). 
           @param patternIndex  Index of a pattern
@@ -509,6 +538,9 @@ class StrokeEngine {
         float _linearSpeedMmPerSecond = 0.0f;
         int _linearSpeedStepsPerSecond = 1;
         float _sensation;
+        // Percentage of the active stroke at which the slow part of a pattern
+        // starts. Injected into the pattern beside sensation; see _inject...
+        float _slowStartPercent = 50.0f;
         bool _applyUpdate = false;
         bool _abortHoming = false;
         MotionDriver *_driver = NULL;

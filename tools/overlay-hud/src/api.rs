@@ -35,7 +35,14 @@ pub const FALLBACK_PATTERNS: &[&str] = &[
     "Deeper",
     "Stop'n'Go",
     "Insist",
-    "Knot",
+    "Knot Short",
+    "Random Depth",
+    "Half'n'Out",
+    "Progressive",
+    "Knot Deep",
+    "Slap",
+    "Random Target",
+    "Point",
 ];
 
 /// Full `/rest/strokeState` payload: commands plus telemetry.
@@ -59,6 +66,12 @@ pub struct StrokeState {
     pub sweep_start: f32,
     pub clipping: bool,
     pub keep_stroke_start: bool,
+    /// Where the slow part of the running pattern starts, as a share of the
+    /// stroke. Only the patterns that report `uses_slow_start` read it.
+    pub slow_start: f32,
+    /// True when the running pattern reads `slow_start`; hides the slider when
+    /// false instead of offering a control that does nothing.
+    pub uses_slow_start: bool,
 }
 
 /// `/rest/strokeSettings`: the motion scale and the slider limits.

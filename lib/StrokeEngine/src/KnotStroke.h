@@ -29,17 +29,27 @@
 /*!
   @brief Knot stroke is a three part stroke.
   1. Out to the start of the active stroke, at three quarter speed.
-  2. In to a depth determined by the sensation, at full speed.
+  2. In to a point the slow-start parameter picks, at full speed.
   3. In to full depth at half speed. This is the knot.
 
-  Sensation -100 puts the middle target at the near end of the sweep, 0 in the
-  middle, +100 as close to the far end as the 5 % guard allows.
+  The slow-start parameter puts the middle target 0 % out (the near end of the
+  sweep) to 100 % out (the far end); the 5 % guard keeps it clear of both ends.
+  This used to come from the sensation slider.
 */
 /**************************************************************************/
 class KnotStroke : public Pattern
 {
 public:
     KnotStroke(const char *str) : Pattern(str) {}
+
+    //! Where the slow push starts, as a percentage of the active stroke.
+    /*!
+      Upstream read this from `sensation`. It is its own parameter now, so the
+      Sensation slider no longer moves the slow point on this pattern.
+    */
+    void setSlowStart(float percent) { _slowStartPercent = constrain(percent, 0.0f, 100.0f); }
+
+    bool usesSlowStart() const { return true; }
 
     motionParameters_t nextTarget(unsigned int index, bool retract = false)
     {
@@ -51,7 +61,7 @@ public:
         _index = index;
 
         float peak = peakSpeedMmPerSecond();
-        float ratio = (_sensation + 100.0f) / 200.0f;
+        float ratio = _slowStartPercent / 100.0f;
 
         // Keep the middle target clear of BOTH ends. At +100 upstream put it on the
         // far end, which leaves the third phase with no travel at all; at -100 it

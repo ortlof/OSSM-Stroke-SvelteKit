@@ -78,6 +78,11 @@ static int appliedSetupMode = 0;
 // Feed rate of the interactive setup modes, mm/s (the cable remote used 10).
 #define SETUP_SPEED_MM_PER_SECOND 10.0f
 
+// The manual retract speed for the pull-out command. Faster than depth setup
+// because it is the "get it out" control and the operator is usually waiting on
+// it, still far below the measured envelope of this machine.
+#define PULL_OUT_SPEED_MM_PER_SECOND 40.0f
+
 // Range the engine really allows in mm, published for the state updater
 // (see StrokeStateService.h). Written at boot, after homing and by the sync task;
 // 32 bit aligned reads and writes, so no lock is needed for a single value.
@@ -371,12 +376,34 @@ static void applyStrokeStateToEngine(const String &originId)
         return;
     }
 
+    if (command.pullOut)
+    {
+        // Transient, like home: clear the flag first so the command cannot repeat.
+        // It also clears run, because a pull-out is meant to end the session, and
+        // leaving run set would let the next unrelated command (any depth or
+        // pattern change) start the sweep again from wherever it stopped.
+        strokeStateService.update([](StrokeState &state)
+                                  {
+            state.pullOut = false;
+            state.run = false;
+            return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
+
+        // moveToMin() stops whatever is running and drives to the home reference
+        // at step 0, which is where the homing run parks the machine.
+        if (!Stroker.moveToMin(PULL_OUT_SPEED_MM_PER_SECOND))
+        {
+            esp32sveltekit.getNotificationService()->pushNotification("Machine is not homed", PUSHWARNING);
+        }
+        return;
+    }
+
     if (command.run && (engineState == PATTERN || engineState == STREAMING))
     {
         // Already running: only take over the pattern parameters.
         Stroker.setDepth(command.depth, false);
         Stroker.setStroke(command.stroke, false);
         Stroker.setSensation(command.sensation, false);
+        Stroker.setSlowStart(command.slowStart, false);
         Stroker.setPattern(command.pattern, false);
         reflectPatternFromEngine();
         return;
@@ -405,6 +432,7 @@ static void applyStrokeStateToEngine(const String &originId)
     Stroker.setDepth(command.depth, false);
     Stroker.setStroke(command.stroke, false);
     Stroker.setSensation(command.sensation, false);
+    Stroker.setSlowStart(command.slowStart, false);
     Stroker.setPattern(command.pattern, false);
     reflectPatternFromEngine();
 
@@ -531,6 +559,11 @@ void syncStrokeStateTask(void *pvParameters)
 
             String name = Stroker.getPatternName(state.pattern);
             if (state.patternName != name) { state.patternName = name; changed = true; }
+
+            // Tell the clients whether the running pattern reads slow_start, so the
+            // slider is only offered where it does something.
+            bool readsSlowStart = Stroker.patternUsesSlowStart();
+            if (state.usesSlowStart != readsSlowStart) { state.usesSlowStart = readsSlowStart; changed = true; }
 
             return changed ? StateUpdateResult::CHANGED : StateUpdateResult::UNCHANGED; },
                                   STROKE_ENGINE_ORIGIN);

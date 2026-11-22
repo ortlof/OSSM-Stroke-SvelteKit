@@ -86,6 +86,23 @@ public:
     */
     virtual void setSensation(float sensation) { _sensation = sensation; }
 
+    //! Where the slow phase of a pattern starts, as a percentage of the active stroke.
+    /*!
+      A second parameter beside sensation, for the patterns that have a fast part and
+      a slow part. Those patterns used to derive the slow point from `sensation`, so
+      the Sensation slider and the pattern fought over one value: moving the slow
+      point moved the sensation with it. This parameter owns the slow point alone.
+
+      Patterns without a slow phase ignore it. `usesSlowStart()` says which is which,
+      so a client can hide the control instead of offering a slider that does nothing.
+
+      @param percent 0..100, the share of the active stroke at which the slow part begins
+    */
+    virtual void setSlowStart(float percent) { _slowStartPercent = percent; }
+
+    //! True when the pattern reads `setSlowStart()`. False by default.
+    virtual bool usesSlowStart() const { return false; }
+
     //! Add a short pause after a move has completed and before the next move is commanded.
     /*!
       @param dwellMillis Pause time in milliseconds. Clamped to 0..500 ms.
@@ -132,7 +149,11 @@ protected:
     // pattern that derives its speed from it.
     float _stroke = 0.0f;
     float _timeOfStroke = 1.0f;
-    float _sensation = 0.0;
+    float _sensation = 0.0f;
+    // Percentage of the active stroke at which the slow part of a pattern starts.
+    // 50 is the middle, which is where these patterns sat before the parameter
+    // existed.
+    float _slowStartPercent = 50.0f;
     const float _infinite = 1.0e30; // an approximation for infinite, for when maximum machine speed and acceleration are wanted
     int _index = -1;
     char _name[STRING_LEN];

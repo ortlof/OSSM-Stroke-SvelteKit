@@ -51,7 +51,7 @@ pub struct Layout {
     pub button_size: f32,
     /// Size of the up and down nudge caps at the ends of a rail.
     pub cap_size: f32,
-    /// Space between the four columns.
+    /// Space between the columns.
     pub gap: f32,
     /// Face size of the vertical slider labels.
     pub label_font: f32,
@@ -82,7 +82,7 @@ impl Default for Config {
             settings_poll_secs: 2.0,
             click_through: false,
             click_through_shortcut: "Ctrl+Shift+O".to_string(),
-            window_width: 250.0,
+            window_width: 300.0,
             window_height: 800.0,   // the expanded shape
             panel_alpha: 3,   // about 99 percent transparent: the view behind stays clear
             layout: Layout::default(),

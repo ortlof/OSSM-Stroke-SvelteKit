@@ -46,6 +46,13 @@ public:
     float stroke = 0.0f;     // stroke length in mm
     float sensation = 0.0f;  // pattern sensation, -100 .. 100
     int pattern = 0;         // pattern index
+    // Where the slow part of a pattern starts, as a share of the active stroke.
+    // Only the patterns that report uses_slow_start read it.
+    float slowStart = 50.0f;
+    // Transient: retract fully to the home reference. Cleared by the firmware,
+    // like home. It also leaves the pattern, because it is the "get it out"
+    // control and leaving run set would let the next command restart the sweep.
+    bool pullOut = false;
 
     // --- telemetry ---
     String servoState = "disabled";  // UNDEFINED / READY / PATTERN / SETUPDEPTH / STREAMING / STOPPING
@@ -55,6 +62,9 @@ public:
     float speedMeasured = 0.0f;    // measured speed in mm/s, from the driver position
     float physicalTravel = 0.0f;   // measured travel in mm between the hard stops
     bool clipping = false;         // engine had to clip a commanded motion
+    // True when the running pattern reads slow_start. The clients hide the slider
+    // when it is false, instead of offering a control that does nothing.
+    bool usesSlowStart = false;
 
 
     // usable_travel and sweep_start are derived, so they are not stored: a stored
@@ -72,6 +82,8 @@ public:
         root["stroke"] = state.stroke;
         root["sensation"] = state.sensation;
         root["pattern"] = state.pattern;
+        root["slow_start"] = state.slowStart;
+        root["pull_out"] = state.pullOut;
 
         root["servo_state"] = state.servoState;
         root["pattern_name"] = state.patternName;
@@ -84,6 +96,7 @@ public:
         const float sweep = state.depth - state.stroke;
         root["sweep_start"] = (sweep > 0.0f) ? sweep : 0.0f;
         root["clipping"] = state.clipping;
+        root["uses_slow_start"] = state.usesSlowStart;
     }
 
     static StateUpdateResult update(JsonObject &root, StrokeState &state, const String &originId)
@@ -95,9 +108,14 @@ public:
         const float strokeIn = root["stroke"] | -1.0f;
         const bool depthSent = (depthIn >= 0.0f);
         const bool strokeSent = (strokeIn >= 0.0f);
+        // slow_start uses -1 as "not sent" for the same reason depth does: 0 is a
+        // legal value, so a plain fallback could not tell "set it to 0" from
+        // "this client did not mention it".
+        const float slowStartIn = root["slow_start"] | -1.0f;
 
         bool run = root["run"] | state.run;
         bool home = root["home"] | state.home;
+        bool pullOut = root["pull_out"] | state.pullOut;
         bool keepStrokeStart = root["keep_stroke_start"] | state.keepStrokeStart;
         int setup = root["setup"] | state.setup;
         float speed = root["speed"] | state.speed;
@@ -105,6 +123,7 @@ public:
         float stroke = strokeSent ? strokeIn : state.stroke;
         float sensation = root["sensation"] | state.sensation;
         int pattern = root["pattern"] | state.pattern;
+        float slowStart = (slowStartIn >= 0.0f) ? constrain(slowStartIn, 0.0f, 100.0f) : state.slowStart;
 
         // Option "keep the stroke start": when only the depth arrives, hold the
         // near endpoint of the sweep and let the stroke grow instead. The sweep
@@ -140,16 +159,19 @@ public:
         if (maxStroke < 0.0f) maxStroke = 0.0f;
         stroke = constrain(stroke, 0.0f, maxStroke);
 
-        if (run == state.run && home == state.home && keepStrokeStart == state.keepStrokeStart &&
+        if (run == state.run && home == state.home && pullOut == state.pullOut &&
+            keepStrokeStart == state.keepStrokeStart &&
             setup == state.setup &&
             speed == state.speed && depth == state.depth &&
-            stroke == state.stroke && sensation == state.sensation && pattern == state.pattern)
+            stroke == state.stroke && sensation == state.sensation && pattern == state.pattern &&
+            slowStart == state.slowStart)
         {
             return StateUpdateResult::UNCHANGED;
         }
 
         state.run = run;
         state.home = home;
+        state.pullOut = pullOut;
         state.keepStrokeStart = keepStrokeStart;
         state.setup = setup;
         state.speed = speed;
@@ -157,6 +179,7 @@ public:
         state.stroke = stroke;
         state.sensation = sensation;
         state.pattern = pattern;
+        state.slowStart = slowStart;
         return StateUpdateResult::CHANGED;
     }
 };

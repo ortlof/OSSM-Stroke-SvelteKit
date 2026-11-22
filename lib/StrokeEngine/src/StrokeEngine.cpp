@@ -264,6 +264,39 @@ float StrokeEngine::getSensation() {
     return _sensation;
 }
 
+void StrokeEngine::setSlowStart(float percent, bool applyNow = false) {
+
+    // Update the pattern with the new slow point, used with the next stroke or on
+    // an update request. Same mutex discipline as setSensation.
+    if (xSemaphoreTake(_patternMutex, portMAX_DELAY) == pdTRUE) {
+
+        // Constrain to 0..100: a share of the active stroke.
+        _slowStartPercent = constrain(percent, 0.0f, 100.0f);
+
+        patternTable[_patternIndex]->setSlowStart(_slowStartPercent);
+
+#ifdef DEBUG_TALKATIVE
+        Serial.println("setSlowStart: " + String(_slowStartPercent));
+#endif
+
+        if ((_state == PATTERN) && (applyNow == true)) {
+            _applyUpdate = true;
+        }
+
+        xSemaphoreGive(_patternMutex);
+    }
+}
+
+float StrokeEngine::getSlowStart() {
+    return _slowStartPercent;
+}
+
+bool StrokeEngine::patternUsesSlowStart() {
+    // The table is fixed at construction and _patternIndex is only ever a valid
+    // index, so this needs no lock: it is a read of a constant answer.
+    return patternTable[_patternIndex]->usesSlowStart();
+}
+
 bool StrokeEngine::setPattern(int patternIndex, bool applyNow = false) {
     // Check wether pattern Index is in range
     if ((patternIndex < patternTableSize) && (patternIndex >= 0)) {
@@ -482,6 +515,7 @@ void StrokeEngine::_injectCurrentPatternSettings() {
     patternTable[_patternIndex]->setTimeOfStroke(_timeOfStroke);
     patternTable[_patternIndex]->setStroke(_strokeMm());
     patternTable[_patternIndex]->setSensation(_sensation);
+    patternTable[_patternIndex]->setSlowStart(_slowStartPercent);
     patternTable[_patternIndex]->setEndpointDwellMillis(_endpointDwellMillis);
 }
 

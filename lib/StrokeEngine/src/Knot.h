@@ -1,10 +1,13 @@
 /**
- *   Knot - a three part cycle: pull out, travel fast to a sensation-controlled
- *   point, then creep the last stretch so the stop lands short of full depth.
+ *   Knot - a three part cycle: pull out, travel fast to a slow point, then creep
+ *   the last stretch so the stop lands short of full depth.
  *
  *   Local pattern. Ported to the millimetre / relative-position contract, and then
  *   re-derived: the phases are defined by how much of the cycle's TIME each one
  *   gets, not by fixed speed factors.
+ *
+ *   The slow point is the slow-start parameter, as a percentage of the active
+ *   stroke. It used to be derived from `sensation`; see setSlowStart().
  *
  *   Why that matters. The old form set each phase's speed as a factor of
  *   `stroke / timeOfStroke`. The creep used 0.03, which works out at 2 % of the
@@ -97,17 +100,25 @@ public:
         _timeOfStroke = fmaxf(KNOT_MIN_TIME_OF_STROKE, 0.5f * safeFullStrokeTime);
     }
 
-    void setSensation(float sensation)
+    //! Where the creep starts, as a percentage of the active stroke.
+    /*!
+      This used to be derived from `sensation`, so the Sensation slider and the
+      pattern fought over one value: moving the slow point moved the sensation too.
+      The slow-start parameter owns it now, and the Sensation slider no longer
+      affects this pattern.
+    */
+    void setSlowStart(float percent)
     {
-        _sensation = constrain(sensation, -100.0f, 100.0f);
+        _slowStartPercent = constrain(percent, 0.0f, 100.0f);
 
-        // -100 => early slow point, +100 => late slow point. Keep a guaranteed
-        // slow section before the stop-short target, otherwise high sensation
-        // values can collapse the creep into nothing.
-        float mappedRatio = (_sensation + 100.0f) / 200.0f;
+        // Keep a guaranteed slow section before the stop-short target, otherwise a
+        // late slow point collapses the creep into nothing.
+        float mappedRatio = _slowStartPercent / 100.0f;
         float maxSlowStartRatio = fmaxf(0.05f, _stopShortRatio - KNOT_MIN_SLOW_RATIO_GAP);
         _slowStartRatio = constrain(mappedRatio, 0.05f, maxSlowStartRatio);
     }
+
+    bool usesSlowStart() const { return true; }
 
     motionParameters_t nextTarget(unsigned int index, bool retract = false)
     {

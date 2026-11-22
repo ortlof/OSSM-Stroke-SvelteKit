@@ -63,8 +63,22 @@ rather than re-deriving.
 ## API
 
 - `POST /rest/signIn` (admin/admin) → `access_token`
-- `/rest/strokeState` — run, depth, stroke, speed, sensation, pattern, setup, position,
-  usable, speed_measured, servo_state, homed
+- `/rest/strokeState` — run, depth, stroke, speed, sensation, **slow_start**,
+  pattern, setup, position, usable, speed_measured, servo_state, homed,
+  clipping, **uses_slow_start**
+- **`slow_start`** (0..100, default 50) is where the slow part of a pattern
+  starts, as a share of the active stroke. It is a second pattern parameter
+  beside `sensation`, and only the patterns that answer `usesSlowStart()` read
+  it: **Knot Short** and **Knot Deep**. `uses_slow_start` in the telemetry says
+  whether the running pattern reads it, so a client can grey the slider out.
+  Both knot patterns used to derive the slow point from `sensation`, so the
+  Sensation slider and the pattern fought over one value; `sensation` no longer
+  moves the slow point on either of them.
+- **`pull_out`** — transient, like `home`. It stops the pattern, clears `run`,
+  and retracts the carriage all the way to the home reference (`moveToMin()`,
+  step 0, which is where the homing run parks it) at 40 mm/s. Clearing `run` is
+  deliberate: leaving it set would let the next unrelated command start the
+  sweep again from wherever it stopped. Read back as `pull_out`.
 - `/rest/strokeSettings` — machine geometry, motor, **and the torque limits**:
   `torque_outward_pct`, `torque_inward_pct` (0..300), `torque_outward_forward`.
   A change applies within ~100 ms and is written through to the drive.
@@ -192,6 +206,15 @@ Two patterns came out of each of two upstreams doing similar-sounding things, so
 the names say which is which. Class names and indices are unchanged, so no stored
 state and no client breaks.
 
+**The two knot patterns take their slow point from `slow_start`, not from
+`sensation`.** Both used to map `sensation` (−100..100) onto the slow point, so
+the Sensation slider and the pattern fought over one value: moving the slow point
+moved the sensation with it. `slow_start` is a share of the active stroke
+(0..100 %, default 50) and owns it alone. Verified on the host harness: Knot
+Short's creep start moves 6 → 30 → 52.2 mm as the slider goes 10 → 50 → 90 %,
+Knot Deep's middle target 6 → 30 → 54 mm, and `sensation` no longer moves either.
+The other 13 patterns are unchanged.
+
 **Nothing upstream describes the six fray-d patterns.** Its `Pattern.mdx` documents
 only indices 0–6 and even says Jack Hammer and Stroke Nibbler are "available in the
 library but not currently implemented in the firmware". The six exist only in
@@ -259,20 +282,32 @@ flash and the pattern table are verified; the carriage has not moved.
 
 ## Overlay HUD, current state
 
-- **Two shapes**: shut `250 × 62` (power button + three-line opener), open **`250 × 800`**.
+- **Two shapes**: shut `300 × 62` (power button + three-line opener), open **`300 × 800`**.
   Opens when the opener is hovered; shuts 400 ms after the pointer leaves, unless a
-  slider is being dragged.
+  slider is being dragged. The width grew with the fifth column; the panel is drawn at
+  `DESIGN_W` 380 points and scaled into the window, so the faders came out the same size.
 - **The panel unfolds away from the nearer screen edge**, so it can be docked at the
   foot of a screen: a strip in the lower half of the screen opens upward (bottom edge
   fixed, top edge moves up), one in the top half opens downward (top edge fixed), which
   is the behaviour it always had. The direction is latched when the panel opens, so
   dragging the open panel across the middle does not flip it under the hand, and the
-  strip returns to where it was when the panel shuts. Measured: strip
-  (300,620)-(447,656) opens to (300,186)-(447,656); a strip at the screen foot,
-  (300,730)-(447,766), opens to (300,296)-(447,766), entirely on screen.
-- **Four columns own their buttons**: column 1 carries power (top) and the pattern menu
-  (bottom); column 3 carries T / keep-start and the crosshair / depth-setup. Columns 2
-  and 4 stay clear so the faders line up.
+  strip returns to where it was when the panel shuts. Re-measured at 300 points wide:
+  strip (300,620)-(487,659) opens to (300,160)-(487,659) with the bottom edge held; a
+  strip at the screen foot, (300,730)-(487,769), opens to (300,270)-(487,769), entirely
+  on screen; one in the upper half, (300,150)-(487,189), opens to (300,150)-(487,649)
+  with the top edge held.
+- **Five columns own their buttons**: column 1 carries power (top) and the pattern menu
+  (bottom); column 2 carries **pull out** (top); column 3 carries T / keep-start (top)
+  and the crosshair / depth-setup (bottom). Columns 4 and 5 stay clear so the last two
+  faders line up with the rest.
+- **Five faders**: Speed, Depth, Stroke, Sensation, **Slow start**. The slow-start label
+  reads `SLOW START` while a pattern that reads the parameter runs and `SLOW (KNOT)`
+  otherwise, driven by `uses_slow_start` in the telemetry. It stays live either way,
+  because the value is remembered and applies as soon as a knot pattern runs.
+- **The pull-out button** is amber, not the Start green or the Stop red, so it can never
+  be read as Start/Stop. Its glyph is a bar with an arrow running up to it (the carriage
+  back at the end stop) and its tooltip says plainly that it moves the machine. It is
+  disabled until the machine is homed.
 - Values above each rail, labels vertical down the left, up/down **nudge caps** (one step
   per press) at the rail ends, block handles.
 - `panel_alpha = 3` (≈99 % transparent), text very dark grey, **Start/stop deliberately
@@ -305,7 +340,9 @@ flash and the pattern table are verified; the carriage has not moved.
    status dot amber on stall, and show the force in newtons.
 3. `user_speed_limit` 500 / `max_speed` 600 sit above what has been proven. The measured
    envelope is ~300 mm/s at a 60 mm stroke.
-4. `controls_row` in `app.rs` is dead code from the layout change; delete it.
+4. `controls_row` in `app.rs` is still dead code from the layout change; delete it. It is
+   a second pattern selector and it is not drawn, so it is only a trap for the next
+   reader.
 5. The overlay's open/shut hover timing (400 ms) has never been judged by a human.
 6. Nudge caps are 15 points and vertical labels 10 points — both are candidates for
    enlargement if they are hard to hit or read at headset distance.
@@ -324,7 +361,16 @@ flash and the pattern table are verified; the carriage has not moved.
    Not yet done on hardware: the Stop'n'Go **boot** case, which needs a run within
    ~10 s of power-up because that is the window the old absolute-uptime gate closed.
    The host harness proves that one case at every uptime.
-10. **The six fray-d patterns and the re-derived Knot are motion-verified** (same
+10. **The slow-start slider and the pull-out button are NOT motion-verified.** What is
+   verified: the firmware builds and runs, `slow_start` round-trips over REST, the two
+   knot patterns' slow point moves with it on the host harness, `uses_slow_start` is
+   true for exactly patterns 7 and 11, the browser UI and the overlay both draw the new
+   controls, and the overlay's label switches between `SLOW START` and `SLOW (KNOT)` with
+   the pattern. **The pull-out command has never been fired, because it moves the
+   carriage and Basti was not at the machine.** Firing it needs one supervised press:
+   expect the pattern to stop, `run` to go false, and the carriage to travel to position
+   0 at 40 mm/s and hold.
+11. **The six fray-d patterns and the re-derived Knot are motion-verified** (same
    supervised setup, 20 mm/s, depth 60 / stroke 40). Knot Short: the full cycle now
    completes in ~12 s, twice the commanded stroke time, and reaches the stop-short
    target 56.8 mm; the creep runs at ~3.3 mm/s, up from 0.4. Knot Deep: 20 → 40 (the

@@ -87,6 +87,16 @@ fn setup_on_fill() -> Color32 {
 fn setup_off_fill() -> Color32 {
     Color32::from_rgba_unmultiplied(60, 63, 70, 70)
 }
+/// The pull-out button moves the machine, so it takes the amber family: plainly a
+/// motion control, and never the Start green or the Stop red.
+fn retract_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(222, 184, 116, 200)
+}
+
+fn retract_hot() -> Color32 {
+    Color32::from_rgba_unmultiplied(238, 202, 138, 232)
+}
+
 fn glyph_c() -> Color32 {
     Color32::from_rgba_unmultiplied(32, 34, 40, 235)
 }
@@ -120,6 +130,12 @@ pub struct OverlayApp {
     /// Sensation is bipolar: -100 .. 100, step 5.
     sensation: f32,
     sensation_active: bool,
+    /// Where the slow part of a pattern starts, 0 .. 100 % of the stroke, step 5.
+    /// A persistent setting rather than a live control: it is remembered while a
+    /// pattern that ignores it runs, and takes effect the moment a knot pattern
+    /// does. The two knot patterns are the only ones that read it.
+    slow_start: f32,
+    slow_start_active: bool,
     /// The selected pattern index, mirrored from `state.pattern`. The combo shows
     /// `pattern_name` from the device; this is only the local selection.
     pattern: i32,
@@ -174,6 +190,8 @@ impl OverlayApp {
             stroke_active: false,
             sensation: 0.0,
             sensation_active: false,
+            slow_start: 50.0,
+            slow_start_active: false,
             pattern: 0,
             seeded: false,
             last_send: Instant::now()
@@ -208,6 +226,7 @@ impl OverlayApp {
             self.depth = s.depth;
             self.stroke = s.stroke;
             self.sensation = s.sensation;
+            self.slow_start = s.slow_start;
             self.pattern = s.pattern;
             self.seeded = true;
         }
@@ -238,6 +257,9 @@ impl OverlayApp {
         }
         if !self.sensation_active {
             self.sensation = s.sensation;
+        }
+        if !self.slow_start_active {
+            self.slow_start = s.slow_start;
         }
         // The combo has no drag state: the in-flight guard above is what stops a
         // just-chosen pattern from snapping back to the old device echo.
@@ -414,7 +436,8 @@ impl OverlayApp {
         let w = if L.slider_width > 1.0 {
             L.slider_width
         } else {
-            ((ui.available_width() - gap * 3.0) / 4.0).floor().max(30.0)
+            // Five columns now, so four gaps between them.
+            ((ui.available_width() - gap * 4.0) / 5.0).floor().max(30.0)
         };
         let THUMB = L.thumb_height;
         let CAPS = L.cap_size;
@@ -423,16 +446,24 @@ impl OverlayApp {
         let pad = ((w - btn) * 0.5).max(0.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
-            for col in 0..4usize {
+            for col in 0..5usize {
                 ui.vertical(|ui| {
                     // Each column owns its own controls: column 1 carries Start and
-                    // Pattern, column 3 carries T and the depth crosshair, and the
-                    // middle columns stay clear so the faders line up.
+                    // Pattern, column 2 the pull-out button, column 3 T and the depth
+                    // crosshair. Columns 4 and 5 stay clear of buttons so the last
+                    // two faders line up with the rest.
                     match col {
                         0 => {
                             ui.horizontal(|ui| {
                                 ui.add_space(pad);
                                 self.big_button(ui);
+                            });
+                        }
+                        1 => {
+                            // Above Depth: pull-out is about how far in the machine is.
+                            ui.horizontal(|ui| {
+                                ui.add_space(pad);
+                                self.pull_out_button(ui);
                             });
                         }
                         2 => {
@@ -462,10 +493,24 @@ impl OverlayApp {
                                 patch.insert("stroke".into(), serde_json::Value::from(self.stroke));
                             }
                         }
-                        _ => {
+                        3 => {
                             // Sensation is bipolar (-100 .. 100), same widget.
                             if v_slider(ui, &mut self.sensation, &mut self.sensation_active, -100.0, 100.0, 5.0, "SENSATION", w, h, THUMB, CAPS, L.label_font) {
                                 patch.insert("sensation".into(), serde_json::Value::from(self.sensation));
+                            }
+                        }
+                        _ => {
+                            // Slow start: a share of the stroke, 0 .. 100, step 5.
+                            // Always live, because the value is remembered and takes
+                            // effect as soon as a knot pattern runs; the label says
+                            // so while the selected pattern ignores it.
+                            let slow_label = if self.snapshot.state.uses_slow_start {
+                                "SLOW START"
+                            } else {
+                                "SLOW (KNOT)"
+                            };
+                            if v_slider(ui, &mut self.slow_start, &mut self.slow_start_active, 0.0, 100.0, 5.0, slow_label, w, h, THUMB, CAPS, L.label_font) {
+                                patch.insert("slow_start".into(), serde_json::Value::from(self.slow_start));
                             }
                         }
                     }
@@ -666,6 +711,63 @@ impl OverlayApp {
             resp.on_hover_text(hint);
         }
     }
+
+    /// A small square that retracts the carriage all the way: the pull-out
+    /// command (`{"pull_out": true}`). It MOVES the machine, so the tooltip says
+    /// so and it is drawn in the amber family rather than the Start green or the
+    /// Stop red. The firmware also ends the pattern with it, which is the point:
+    /// one press and the tool is out.
+    fn pull_out_button(&mut self, ui: &mut egui::Ui) {
+        let connected = self.snapshot.connected;
+        let homed = self.snapshot.state.homed;
+        let can_act = connected && homed;
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(SETUP_SIZE, SETUP_SIZE), Sense::click());
+
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(9),
+            if can_act { retract_fill() } else { disabled_fill() });
+        if resp.hovered() && can_act {
+            painter.rect_filled(rect, CornerRadius::same(9), retract_hot());
+        }
+
+        // A bar with an arrow running up to it: the carriage back at the end stop.
+        let c = rect.center();
+        let t = SETUP_SIZE * 0.26;
+        let ink = glyph_c();
+        painter.line_segment(
+            [egui::pos2(c.x - t, c.y - t), egui::pos2(c.x + t, c.y - t)],
+            egui::Stroke::new(2.2, ink),
+        );
+        painter.line_segment(
+            [egui::pos2(c.x, c.y - t * 0.4), egui::pos2(c.x, c.y + t)],
+            egui::Stroke::new(2.0, ink),
+        );
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(c.x - t * 0.55, c.y - t * 0.3),
+                egui::pos2(c.x + t * 0.55, c.y - t * 0.3),
+                egui::pos2(c.x, c.y - t - 0.5),
+            ],
+            ink,
+            egui::Stroke::NONE,
+        ));
+
+        if resp.clicked() && can_act {
+            self.send_state(serde_json::json!({ "pull_out": true }));
+        }
+        if resp.hovered() {
+            let hint = if !connected {
+                "pull out: no connection to the machine"
+            } else if !homed {
+                "pull out: the machine is not homed"
+            } else {
+                "Pull out: stops the pattern and retracts all the way to the home \
+                 end at 40 mm/s. This moves the machine."
+            };
+            resp.on_hover_text(hint);
+        }
+    }
 }
 
 impl eframe::App for OverlayApp {
@@ -704,9 +806,12 @@ impl eframe::App for OverlayApp {
         // so the power button stays put and stays clickable when the panel is shut.
         static OVER_OPENER: AtomicBool = AtomicBool::new(false);
 
-        const OPEN_W: f32 = 250.0;
+        // Five columns need more room than four. The panel is drawn at DESIGN_W
+        // points and scaled into the window, so widening both keeps the faders at
+        // roughly the size they were with four.
+        const OPEN_W: f32 = 300.0;
         const OPEN_H: f32 = 800.0;
-        const SHUT_W: f32 = 250.0;
+        const SHUT_W: f32 = 300.0;
         const SHUT_H: f32 = 62.0;
 
         let now_ms = (ctx.input(|i| i.time) * 1000.0) as u64;
@@ -714,7 +819,8 @@ impl eframe::App for OverlayApp {
         let dragging = self.speed_active
             || self.depth_active
             || self.stroke_active
-            || self.sensation_active;
+            || self.sensation_active
+            || self.slow_start_active;
 
         if hovered || dragging {
             LEFT_AT.store(0, Ordering::Relaxed);
@@ -775,7 +881,7 @@ impl eframe::App for OverlayApp {
             }
         }
 
-        const DESIGN_W: f32 = 320.0;
+        const DESIGN_W: f32 = 380.0;
         let cur = ctx.zoom_factor();
         let win_w = ctx.content_rect().width().max(1.0) * cur;
         // Shrink when the window is small, but never enlarge: 1.0 is the ceiling.

@@ -20,6 +20,7 @@
 		stroke: number;
 		sensation: number;
 		pattern: number;
+		slow_start: number;
 		servo_state: string;
 		pattern_name: string;
 		homed: boolean;
@@ -29,6 +30,7 @@
 		usable_travel: number;
 		sweep_start: number;
 		clipping: boolean;
+		uses_slow_start: boolean;
 	}
 
 	interface StrokeTuning {
@@ -52,6 +54,7 @@
 		stroke: 0,
 		sensation: 0,
 		pattern: 0,
+		slow_start: 50,
 		servo_state: 'UNDEFINED',
 		pattern_name: '',
 		homed: false,
@@ -60,7 +63,8 @@
 		physical_travel: 450,
 		usable_travel: 420,
 		sweep_start: 0,
-		clipping: false
+		clipping: false,
+		uses_slow_start: false
 	});
 
 	let patterns: string[] = $state([]);
@@ -73,6 +77,8 @@
 	// The engine confines depth and stroke to the travel minus both keepout
 	// zones, so the sliders use that range, not the full measured travel.
 	let travel = $derived(state.usable_travel > 0 ? state.usable_travel : 420);
+	// The slow-start slider is a share of the stroke, so show what it comes to in mm.
+	let slowStartMm = $derived((state.stroke * state.slow_start) / 100);
 
 	function authHeader() {
 		return {
@@ -230,6 +236,13 @@
 			<button class="btn inline-flex items-center" onclick={() => command({ home: true })}>
 				<Home class="mr-2 h-5 w-5" /><span>Home</span>
 			</button>
+			<button
+				class="btn inline-flex items-center"
+				disabled={!state.homed}
+				onclick={() => command({ pull_out: true })}
+			>
+				Pull out
+			</button>
 			<button class="btn inline-flex items-center" onclick={loadState}>
 				<Reload class="mr-2 h-5 w-5" /><span>Reload</span>
 			</button>
@@ -273,6 +286,31 @@
 					bind:value={state.sensation}
 					onchange={() => command({ sensation: state.sensation })}
 				/>
+			</div>
+
+			<div class="fieldset">
+				<label class="label" for="slowstart">
+					Slow start ({state.slow_start.toFixed(0)}%{state.uses_slow_start ? ' · ' + slowStartMm.toFixed(0) + ' mm' : ''})
+				</label>
+				<input
+					id="slowstart"
+					type="range"
+					class="range range-primary"
+					min="0"
+					max="100"
+					step="5"
+					disabled={!state.uses_slow_start}
+					bind:value={state.slow_start}
+					onchange={() => command({ slow_start: state.slow_start })}
+				/>
+				<div class="label">
+					{#if state.uses_slow_start}
+						Where the slow part starts, as a share of the stroke. Knot Short creeps from here on; Knot Deep
+						pushes slowly from here to full depth.
+					{:else}
+						Only the two knot patterns use this. Pick Knot Short or Knot Deep and the slider wakes up.
+					{/if}
+				</div>
 			</div>
 
 			<div class="fieldset">

@@ -14,12 +14,25 @@ cross build link with no mingw toolchain at all.
 
 ## What it shows
 
-* **Four vertical sliders** — Speed (capped at the slider limit from
-  `/rest/strokeSettings`), Depth, Stroke and Sensation (`-100 .. 100`, step 5) —
-  and **one Start/Stop button**. The sliders and the button are the whole control
-  surface, and they are deliberately large: the overlay is aimed at a pointer that
-  is far from the screen (a VR controller, a laser pointer, a hand on a touch
-  panel), so every target is big and nothing else competes for attention.
+* **Five vertical sliders** — Speed (capped at the slider limit from
+  `/rest/strokeSettings`), Depth, Stroke, Sensation (`-100 .. 100`, step 5) and
+  Slow start (`0 .. 100 %` of the stroke, step 5) — and **one Start/Stop button**.
+  The sliders and the button are the whole control surface, and they are
+  deliberately large: the overlay is aimed at a pointer that is far from the
+  screen (a VR controller, a laser pointer, a hand on a touch panel), so every
+  target is big and nothing else competes for attention.
+* **Slow start** is where the slow part of a pattern begins. Only the two knot
+  patterns read it: **Knot Short** creeps from there on, **Knot Deep** pushes
+  slowly from there to full depth. While the running pattern ignores it the label
+  reads `SLOW (KNOT)`; it reads `SLOW START` the moment a knot pattern is selected.
+  The slider stays live either way, because the value is remembered and takes
+  effect as soon as a knot pattern runs.
+* **A small Pull-out button.** A square amber button with a hand-drawn
+  arrow-running-up-to-a-bar glyph sits above the Depth fader. It sends
+  `{"pull_out": true}`, which stops the pattern and retracts the carriage all the
+  way to the home end at 40 mm/s. It is amber rather than the Start green or the
+  Stop red so it can never be mistaken for Start/Stop, and its tooltip says
+  plainly that it **moves the machine**.
 * **A compact pattern selector.** A small combo box in a slim row across the
   bottom picks the stroke pattern (`{"pattern": N}`). It shows the device's
   `pattern_name` and is small on purpose — it is a selector, not a feature.
@@ -43,8 +56,8 @@ browser page, which is the better place for it.
 
 ## The two shapes
 
-Shut, the window is a 250 × 62 strip: the Start/Stop button and a three-line
-opener, nothing else. Hovering the opener opens the full 250 × 800 panel; the
+Shut, the window is a 300 × 62 strip: the Start/Stop button and a three-line
+opener, nothing else. Hovering the opener opens the full 300 × 800 panel; the
 panel shuts again 400 ms after the pointer leaves it, unless a slider is being
 dragged. Click-through (`Ctrl+Shift+O`, or `overlay-hud --toggle-click-through`
 from another process) lets the pointer pass through the panel entirely.
