@@ -43,13 +43,15 @@ extern "C"
     static Deeper deeper("Deeper");
     static StopNGo stopNGo("Stop'n'Go");
     static Insist insist("Insist");
-    static Knot knot("Knot");
-    static RandomDepth randomDepth("RandomDepth");
+    // The two knot patterns and the two random ones are genuinely different, so
+    // the names say which is which in the dropdown. Class names stay as they are.
+    static Knot knot("Knot Short");                              // creeps, stops short of full depth
+    static RandomDepth randomDepth("Random Depth");              // random insertion depth, full return
     static HalfnOut halfnOut("Half'n'Out");
     static ProgressiveStroke progressiveStroke("Progressive");
-    static KnotStroke knotStroke("Knot Stroke");
+    static KnotStroke knotStroke("Knot Deep");                   // slow push all the way in
     static SlapStroke slapStroke("Slap");
-    static RandomStroke randomStroke("Random Stroke");
+    static RandomStroke randomStroke("Random Target");           // jumps anywhere, at least N apart
     static PointStroke pointStroke("Point");
     // <-- instantiate your new pattern class here!
 
