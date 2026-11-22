@@ -128,7 +128,11 @@ def main():
     PASSWORD = args.password
     if not os.path.isdir(ROOT):
         raise SystemExit(f"no build at {ROOT}: run npm run build in interface/ first")
-    print(f"device {DEVICE}, serving {ROOT}")
+    # NOT a readiness line: this runs before the port is bound, so it prints even when
+    # the bind then fails with "Address already in use". The line that means the server
+    # is up is the one inside the `with` below, after bind(). Keep the word "serving"
+    # out of this one so nothing can watch for it and be fooled.
+    print(f"device {DEVICE}, front end at {ROOT}, port {args.port}")
     sign_in()
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
