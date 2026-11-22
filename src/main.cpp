@@ -20,12 +20,68 @@
 #include <FastAccelStepperMotionDriver.h>
 #include <StrokeEngine.h>
 
+#include <cstdlib>
+#include <cxxabi.h>
+#include <exception>
+
 #include "OSSM_Config.h"
 #include "OSSM_PinDEF.h"
 #include "ModbusProbeService.h"
 #include "SessionUploadService.h"
 #include "StrokeSettingsService.h"
 #include "StrokeStateService.h"
+
+/*
+ *   An uncaught C++ exception aborts this board, and the ESP-IDF panic handler can
+ *   only print registers and addresses - the exception TYPE is lost, and a
+ *   truncated backtrace names nothing. Measured on this machine: `rst:0xc` with
+ *   "abort() was called at PC 0x401b5dab", which resolves to __gxx_personality_v0,
+ *   so something threw and nobody caught it.
+ *
+ *   This handler runs BEFORE the abort and prints what was thrown. It turns "the
+ *   device died again" into either `std::bad_alloc` (an allocation failed, i.e.
+ *   memory pressure, which is the strong candidate here) or a named logic fault.
+ *   It is deliberately tiny: it runs when the machine is already failing, so it
+ *   avoids allocation of its own and falls back if the demangle cannot allocate.
+ */
+static void uncaughtExceptionHandler()
+{
+    Serial.println();
+    Serial.println("!!! UNCAUGHT C++ EXCEPTION - this is what aborts the board !!!");
+
+    std::type_info *info = abi::__cxa_current_exception_type();
+    if (info != nullptr)
+    {
+        int status = 0;
+        char *pretty = abi::__cxa_demangle(info->name(), nullptr, nullptr, &status);
+        Serial.printf("  type: %s\n", (status == 0 && pretty != nullptr) ? pretty : info->name());
+        if (pretty != nullptr)
+        {
+            free(pretty);
+        }
+    }
+    else
+    {
+        Serial.println("  type: unknown (no active exception)");
+    }
+
+    try
+    {
+        throw;
+    }
+    catch (const std::exception &e)
+    {
+        Serial.printf("  what(): %s\n", e.what());
+    }
+    catch (...)
+    {
+        Serial.println("  what(): (not a std::exception)");
+    }
+
+    Serial.println("!!! aborting now, as the runtime wanted !!!");
+    Serial.flush();
+    abort();
+}
 
 #define SERIAL_BAUD_RATE 115200
 
@@ -698,6 +754,10 @@ void emitPatternList()
 void setup()
 {
     Serial.begin(SERIAL_BAUD_RATE);
+
+    // First thing after the port is up: if anything below throws and nothing
+    // catches it, the type is printed instead of a bare abort.
+    std::set_terminate(uncaughtExceptionHandler);
 
     // --- network, web server, settings ---
     esp32sveltekit.setMDNSAppName("OSSM Stroke");
