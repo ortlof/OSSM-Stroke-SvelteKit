@@ -2,10 +2,22 @@
  *   Knot - a three part cycle: pull out, travel fast to a sensation-controlled
  *   point, then creep the last stretch so the stop lands short of full depth.
  *
- *   Local pattern, ported to the millimetre / relative-position contract. The old
- *   version derived absolute step targets from the engine's _depth and clamped
- *   itself against _maxSpeed; the engine does both now, so this only has to
- *   describe the shape of the stroke.
+ *   Local pattern. Ported to the millimetre / relative-position contract, and then
+ *   re-derived: the phases are defined by how much of the cycle's TIME each one
+ *   gets, not by fixed speed factors.
+ *
+ *   Why that matters. The old form set each phase's speed as a factor of
+ *   `stroke / timeOfStroke`. The creep used 0.03, which works out at 2 % of the
+ *   commanded speed, and the fast phases used 1.1, which is only 73 % of it. So
+ *   the pattern never reached the speed it was asked for, and the creep dominated
+ *   the cycle: measured on the machine at 20 mm/s, the creep phase alone took
+ *   about 40 seconds for a 40 mm stroke. A slower command made the ratio worse,
+ *   and the cycle time was unbounded.
+ *
+ *   Now a cycle takes a fixed number of stroke times and every phase is paced by
+ *   the commanded speed. The creep is still much slower than the rest because it
+ *   covers a small distance over a long share of the cycle - slow by construction
+ *   rather than by a magic factor, and it scales.
  */
 
 #ifndef KNOT_H
@@ -36,24 +48,21 @@
 #define KNOT_MIN_TIME_OF_STROKE 0.005f
 #endif
 
-#ifndef KNOT_FAST_SPEED_FACTOR
-#define KNOT_FAST_SPEED_FACTOR 1.1f
+// How long each phase gets, in half-strokes. A cycle is therefore
+// 0.75 + 0.75 + 2.5 = 4 half-strokes = 2 commanded stroke times, whatever the
+// command: the creep covers a short distance over 2.5 of those, and that is what
+// makes it slow. Keep the creep share clearly the largest, or the pattern stops
+// feeling like a knot.
+#ifndef KNOT_RETURN_TIME_SHARES
+#define KNOT_RETURN_TIME_SHARES 0.75f
 #endif
 
-#ifndef KNOT_SLOW_SPEED_FACTOR
-#define KNOT_SLOW_SPEED_FACTOR 0.03f
+#ifndef KNOT_APPROACH_TIME_SHARES
+#define KNOT_APPROACH_TIME_SHARES 0.75f
 #endif
 
-#ifndef KNOT_FAST_ACCEL_FACTOR
-#define KNOT_FAST_ACCEL_FACTOR 1.50f
-#endif
-
-#ifndef KNOT_SLOW_ACCEL_FACTOR
-#define KNOT_SLOW_ACCEL_FACTOR 2.30f
-#endif
-
-#ifndef KNOT_RETURN_ACCEL_FACTOR
-#define KNOT_RETURN_ACCEL_FACTOR 2.00f
+#ifndef KNOT_CREEP_TIME_SHARES
+#define KNOT_CREEP_TIME_SHARES 2.5f
 #endif
 
 #ifndef KNOT_STOP_SHORT_RATIO
@@ -64,10 +73,14 @@
 #define KNOT_MIN_SLOW_RATIO_GAP 0.05f
 #endif
 
-// A speed of zero is not a move, it is a hang: the engine would see the driver
-// idle and ask again forever. Keep every commanded move off the floor.
+// A zero-length or zero-speed phase is a hang, not a move: the driver stays idle
+// and StrokeEngine asks for the same move forever. Keep every phase off the floor.
 #ifndef KNOT_MIN_SPEED_MM_PER_SECOND
 #define KNOT_MIN_SPEED_MM_PER_SECOND 0.1f
+#endif
+
+#ifndef KNOT_MIN_ACCEL_MM_PER_SECOND_SQUARED
+#define KNOT_MIN_ACCEL_MM_PER_SECOND_SQUARED 1.0f
 #endif
 
 class Knot : public Pattern
@@ -88,9 +101,9 @@ public:
     {
         _sensation = constrain(sensation, -100.0f, 100.0f);
 
-        // -100 => early slow point, +100 => late slow point.
-        // Keep a guaranteed slow section before the stop-short target, otherwise
-        // high sensation values can collapse the slow move into nothing.
+        // -100 => early slow point, +100 => late slow point. Keep a guaranteed
+        // slow section before the stop-short target, otherwise high sensation
+        // values can collapse the creep into nothing.
         float mappedRatio = (_sensation + 100.0f) / 200.0f;
         float maxSlowStartRatio = fmaxf(0.05f, _stopShortRatio - KNOT_MIN_SLOW_RATIO_GAP);
         _slowStartRatio = constrain(mappedRatio, 0.05f, maxSlowStartRatio);
@@ -105,21 +118,25 @@ public:
         }
         _index = index;
 
+        float slowStart = calculateSlowStart();
+        float stopShort = calculateStopShort();
+
         switch (index % 3)
         {
         case 0:
-            // Pull out to the start of the active stroke.
-            setMove(0.0f, KNOT_FAST_SPEED_FACTOR, KNOT_RETURN_ACCEL_FACTOR);
+            // Back out to the near end, from wherever the creep stopped.
+            setMove(0.0f, stopShort, KNOT_RETURN_TIME_SHARES);
             break;
 
         case 1:
             // Fast travel to the sensation-controlled slow point.
-            setMove(calculateSlowStart(), KNOT_FAST_SPEED_FACTOR, KNOT_FAST_ACCEL_FACTOR);
+            setMove(slowStart, slowStart, KNOT_APPROACH_TIME_SHARES);
             break;
 
         case 2:
-            // Slow move, but stop short of full depth. The next step pulls out.
-            setMove(calculateStopShort(), KNOT_SLOW_SPEED_FACTOR, KNOT_SLOW_ACCEL_FACTOR);
+            // Creep the rest of the way: a short distance over the longest share
+            // of the cycle.
+            setMove(stopShort, stopShort - slowStart, KNOT_CREEP_TIME_SHARES);
             break;
         }
 
@@ -149,14 +166,24 @@ private:
         return fmaxf(target, 0.0f);
     }
 
-    void setMove(float targetStroke, float speedFactor, float accelFactor)
+    //! One phase covering `distance` millimetres in `timeShares` half-strokes.
+    /*!
+      For the 1/3-1/3-1/3 trapezoid the other patterns use, the peak speed over a
+      distance d in a time t is 1.5 d / t and the acceleration is 4.5 d / t^2.
+      Those are the relations SimpleStroke already derives from `stroke` and
+      `timeOfStroke`, so a phase built this way is consistent with the rest of the
+      library instead of being a second, private set of magic factors.
+    */
+    void setMove(float targetStroke, float distance, float timeShares)
     {
-        float safeTimeOfStroke = fmaxf(KNOT_MIN_TIME_OF_STROKE, _timeOfStroke);
+        float phaseTime = fmaxf(KNOT_MIN_TIME_OF_STROKE, _timeOfStroke * timeShares);
+        float span = fmaxf(0.0f, distance);
 
         _nextMove.stroke = constrain(targetStroke, 0.0f, _stroke);
         _nextMove.speed = fmaxf(KNOT_MIN_SPEED_MM_PER_SECOND,
-                                speedFactor * _stroke / safeTimeOfStroke);
-        _nextMove.acceleration = accelFactor * _nextMove.speed / safeTimeOfStroke;
+                                1.5f * span / phaseTime);
+        _nextMove.acceleration = fmaxf(KNOT_MIN_ACCEL_MM_PER_SECOND_SQUARED,
+                                       4.5f * span / (phaseTime * phaseTime));
         _nextMove.skip = false;
     }
 };
