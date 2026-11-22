@@ -116,6 +116,7 @@ static void homingNotification(bool isHomed);
 static void telemetryCallback(float positionMm, float speedMmPerSecond, bool clipping);
 static void loadSettings();
 static void applyMotionTuning();
+static void applyTorqueLimits();
 static void startHoming();
 static void applyStrokeStateToEngine(const String &originId);
 void syncStrokeStateTask(void *pvParameters);
@@ -239,6 +240,33 @@ static void applyMotionTuning()
     Stroker.setReversalAccelerationFactor(settings.reversal_acceleration_factor);
     Stroker.setMaxAcceleration(settings.max_acceleration);
     userSpeedLimit = min(settings.user_speed_limit, settings.max_speed);
+}
+
+// ---------------------------------------------------------------------------
+// Direction-specific torque limits (P05-10 forward / P05-11 reverse)
+//
+// Outward is the direction that extends the carriage, inward retracts it. The
+// drive stores the forward limit positive and the reverse limit negative, and
+// it does not keep either across a power cycle, so they are written here at
+// boot and again whenever the setting changes. Nothing writes them while the
+// engine runs: a pattern must not move the safety limit under the operator.
+// ---------------------------------------------------------------------------
+
+static void applyTorqueLimits()
+{
+    StrokeSettings settings;
+    strokeSettingsService.read([&settings](StrokeSettings &s)
+                               { settings = s; });
+
+    int outwardRaw = (int)lroundf(constrain(settings.torque_outward_pct, 0.0f, 300.0f) * 10.0f);
+    int inwardRaw = (int)lroundf(constrain(settings.torque_inward_pct, 0.0f, 300.0f) * 10.0f);
+
+    // Which register each one lands in is the wiring question, and that is what
+    // torque_outward_forward answers.
+    int forwardMag = settings.torque_outward_forward ? outwardRaw : inwardRaw;
+    int reverseMag = settings.torque_outward_forward ? inwardRaw : outwardRaw;
+
+    modbusProbeService.setTorqueLimits(forwardMag, reverseMag);
 }
 
 // ---------------------------------------------------------------------------
@@ -556,10 +584,13 @@ void setup()
     Stroker.begin(&strokingMachine, &servoMotor, &stepperDriver);
     Stroker.registerTelemetryCallback(telemetryCallback);
     applyMotionTuning();  // after begin(): it resets the factors to the defaults
+    applyTorqueLimits();  // the drive does not keep the limits across a power cycle
 
     // A change to the machine settings applies the tuning immediately.
     strokeSettingsService.addUpdateHandler([&](const String &originId)
-                                           { applyMotionTuning(); },
+                                           {
+        applyMotionTuning();
+        applyTorqueLimits(); },
                                            false);
 
     // Command applier: runs on every state change that a client caused

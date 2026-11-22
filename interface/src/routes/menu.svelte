@@ -54,6 +54,12 @@
 			feature: true
 		},
 		{
+			title: 'Machine Setup',
+			icon: Control,
+			href: '/setup',
+			feature: true
+		},
+		{
 			title: 'Connections',
 			icon: Remote,
 			feature: page.data.features.mqtt || page.data.features.ntp,

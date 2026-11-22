@@ -61,6 +61,15 @@ public:
     bool invert_direction = true;
     bool sensorless_homing = true;  // true: current sensing, false: end stop switch
 
+    // Torque limits at the drive, in percent of rated torque. Outward is the
+    // direction that extends the carriage, inward retracts it. Which drive
+    // register each one lands in is decided by torque_outward_forward, because
+    // "forward" is a wiring fact about the drive and not a physical direction.
+    // 0 is legal and means "no torque in this direction".
+    float torque_outward_pct = 200.0f;   // 0 .. 300
+    float torque_inward_pct = 200.0f;    // 0 .. 300
+    bool torque_outward_forward = true;  // outward drives the drive's positive direction
+
     // How far the near end of a sweep keeps away from the home position. The
     // engine declares the home position keepout away from the stall that homing
     // finds, so a sweep that starts at 0 returns to the homing point on every
@@ -88,6 +97,9 @@ public:
         root["reversal_acceleration_factor"] = settings.reversal_acceleration_factor;
         root["home_margin"] = settings.home_margin;
         root["far_margin"] = settings.far_margin;
+        root["torque_outward_pct"] = settings.torque_outward_pct;
+        root["torque_inward_pct"] = settings.torque_inward_pct;
+        root["torque_outward_forward"] = settings.torque_outward_forward;
     }
 
     static StateUpdateResult update(JsonObject &root, StrokeSettings &settings, const String &originId)
@@ -108,6 +120,15 @@ public:
         float farMargin = root["far_margin"] | settings.far_margin;
         farMargin = constrain(farMargin, 0.0f, 50.0f);
 
+        // Torque limits. The drive accepts 0 .. 300.0 % of rated in each
+        // direction. A value below about 15 percent cannot hold the carriage
+        // against gravity on a vertical axis; the UI warns, the drive obeys.
+        float torqueOutward = root["torque_outward_pct"] | settings.torque_outward_pct;
+        torqueOutward = constrain(torqueOutward, 0.0f, 300.0f);
+        float torqueInward = root["torque_inward_pct"] | settings.torque_inward_pct;
+        torqueInward = constrain(torqueInward, 0.0f, 300.0f);
+        bool torqueOutwardForward = root["torque_outward_forward"] | settings.torque_outward_forward;
+
         if (physical_travel == settings.physical_travel && keepout == settings.keepout &&
             steps_per_mm == settings.steps_per_mm && max_speed == settings.max_speed &&
             max_acceleration == settings.max_acceleration &&
@@ -116,7 +137,10 @@ public:
             sensorless_homing == settings.sensorless_homing &&
             reversal == settings.reversal_acceleration_factor &&
             homeMargin == settings.home_margin &&
-            farMargin == settings.far_margin)
+            farMargin == settings.far_margin &&
+            torqueOutward == settings.torque_outward_pct &&
+            torqueInward == settings.torque_inward_pct &&
+            torqueOutwardForward == settings.torque_outward_forward)
         {
             return StateUpdateResult::UNCHANGED;
         }
@@ -132,6 +156,9 @@ public:
         settings.reversal_acceleration_factor = reversal;
         settings.home_margin = homeMargin;
         settings.far_margin = farMargin;
+        settings.torque_outward_pct = torqueOutward;
+        settings.torque_inward_pct = torqueInward;
+        settings.torque_outward_forward = torqueOutwardForward;
         return StateUpdateResult::CHANGED;
     }
 };

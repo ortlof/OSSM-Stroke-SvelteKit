@@ -163,21 +163,51 @@ inline bool readRangeValid(int32_t start, int32_t count)
 // Write path: function 6 (write single register) and nothing else.
 //
 // The iHSV57 torque limit is a mechanical safety limit. It lives in 0x01FE
-// (forward) and 0x01FF (reverse) with a scale of 0.1 %, so 2000 is 200.0 %.
+// (P05-10, forward) and 0x01FF (P05-11, reverse) with a scale of 0.1 %, so
+// 2000 is 200.0 %. The drive stores the two directions with opposite signs:
+// the vendor parameter table declares P05-10 as 0 .. +300.0 % and P05-11 as
+// -300.0 % .. 0, and the drive at its factory default reads +2000 on 0x01FE
+// and -2000 (0xF830) on 0x01FF. Read back and checked on the machine.
+//
+// Everything above this link therefore speaks a MAGNITUDE in 0.1 % of rated,
+// and only the wire value carries the sign (torqueLimitWireValue below).
+//
 // This window is the whole point of the guard: eat a step at 300 % and the rack
 // takes the load. torqueLimitValid is deliberately a validator, not a clamper -
 // an out-of-range request must be refused, never quietly moved to the boundary,
 // because the operator has to know their number was not the one that got used.
+//
+// 0 is a legal limit and means "no torque in this direction". On a vertical
+// axis that is the direction gravity pulls in, so the operator can turn the
+// carriage into a falling load. The UI warns; the drive obeys.
 // ---------------------------------------------------------------------------
 
 #define MODBUS_TORQUE_REG_FORWARD 0x01FE
 #define MODBUS_TORQUE_REG_REVERSE 0x01FF
-#define MODBUS_TORQUE_MIN 100   // 10.0 %
-#define MODBUS_TORQUE_MAX 3000  // 300.0 %
+#define MODBUS_TORQUE_MIN 0     // no torque in this direction
+#define MODBUS_TORQUE_MAX 3000  // 300.0 % of rated
 
 inline bool torqueLimitValid(int32_t value)
 {
     return value >= MODBUS_TORQUE_MIN && value <= MODBUS_TORQUE_MAX;
+}
+
+// The wire value for a torque limit: the magnitude for the forward register,
+// the two's complement of the magnitude for the reverse register. The drive
+// stores the reverse limit as a negative number, so writing 2000 to 0x01FF
+// would hand it a value outside its declared range.
+inline uint16_t torqueLimitWireValue(bool forward, int32_t magnitude)
+{
+    int32_t raw = forward ? magnitude : -magnitude;
+    return (uint16_t)(int16_t)raw;
+}
+
+// Signed interpretation of a torque-limit read-back, returned as a magnitude.
+// The reverse register answers 0xF830 for -200.0 %, and the caller wants 2000.
+inline int32_t torqueLimitMagnitude(uint16_t wire)
+{
+    int16_t signedRaw = (int16_t)wire;
+    return signedRaw < 0 ? -(int32_t)signedRaw : (int32_t)signedRaw;
 }
 
 // A function 6 request is exactly 8 bytes: unit, function, reg hi, reg lo,

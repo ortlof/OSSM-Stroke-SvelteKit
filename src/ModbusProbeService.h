@@ -83,6 +83,14 @@ extern volatile bool modbusProbeInvert;   // mirror of mbInvert, for the poll ta
 extern volatile bool modbusParamWritePending;
 extern volatile int32_t modbusParamWriteReg;
 extern volatile int32_t modbusParamWriteValue;
+
+// Torque limits queued by the settings path (main.cpp). The values are
+// magnitudes in 0.1 % of rated, 0 .. 3000, and they are meant for the two
+// direction-specific limit registers, not for one of them. Set through
+// ModbusProbeService::setTorqueLimits(), which is safe to call from any task.
+extern volatile bool modbusTorqueLimitsPending;
+extern volatile int32_t modbusTorqueLimitsForward;  // magnitude for 0x01FE
+extern volatile int32_t modbusTorqueLimitsReverse;  // magnitude for 0x01FF
 extern volatile int32_t modbusFirmwareSteps;
 
 extern volatile int32_t modbusFirmwareStepsPerMmX1000;
@@ -150,6 +158,9 @@ public:
     int tqAvg = 0;             // d11 average torque
     int tqPeak = 0;            // d12 peak torque
     int tqOverload = 0;        // d13 overload load rate
+    int tqLimitFwd = 0;        // drive 0x01FE torque limit as a magnitude, 0.1 %
+    int tqLimitRev = 0;        // drive 0x01FF torque limit as a magnitude, 0.1 %
+    bool tqLimitOk = false;    // the last torque-limit poll got a valid answer
     bool driveStalled = false; // firmware is sending steps the drive is not taking
     int alarmWord = 0;         // raw Register25 value
     int pwReg = -1;            // parameter register the operator asked to write
@@ -214,11 +225,21 @@ public:
         root["speed_actual_mm_s"] = state.speedActual;
         root["speed_peak_mm_s"] = state.speedPeak;
         root["force_n"] = state.forceN;
+        // The same rack force read as an equivalent hanging mass. This is a unit
+        // change, not a weighing: the drive reports an estimated electromagnetic
+        // torque, and on a vertical axis the number carries the carriage's own
+        // weight and the force to accelerate it as well as any external load.
+        root["force_kg"] = state.forceN / 9.80665f;
         root["torque_cmd_pct"] = state.tqCmd / 10.0f;
         root["torque_fb_pct"] = state.tqFb / 10.0f;
         root["torque_avg_pct"] = state.tqAvg / 10.0f;
         root["torque_peak_pct"] = state.tqPeak / 10.0f;
         root["overload_pct"] = state.tqOverload / 10.0f;
+        // What the drive actually holds in P05-10 / P05-11 right now, as
+        // magnitudes. Read back from the drive, not echoed from the settings.
+        root["torque_limit_forward_pct"] = state.tqLimitFwd / 10.0f;
+        root["torque_limit_reverse_pct"] = state.tqLimitRev / 10.0f;
+        root["torque_limit_ok"] = state.tqLimitOk;
         root["drive_stalled"] = state.driveStalled;
         root["drive_alarm_word"] = state.alarmWord;
         root["param_write_reg"] = state.pwReg;
@@ -400,6 +421,12 @@ public:
 
     void begin();
 
+    // Queue a torque-limit write for the probe task. Magnitudes in 0.1 % of
+    // rated (0 .. 3000). Forward goes to 0x01FE, reverse to 0x01FF with the
+    // drive's negative sign applied. Safe from any task: it only sets flags,
+    // the one UART owner does the work.
+    void setTorqueLimits(int forwardMagnitude, int reverseMagnitude);
+
 private:
     static void taskEntry(void *param);
 
@@ -411,6 +438,7 @@ private:
     void runParamWrite(int reg, int value);
     void pollAlarm();
     void pollTorque();
+    void pollTorqueLimits();
     void openPort();
 
     HttpEndpoint<ModbusProbeState> _httpEndpoint;
@@ -425,6 +453,7 @@ private:
     int32_t _posRefSteps = 0;       // firmware step count at the reference
     uint32_t _lastAlarmMs = 0;      // alarm poll cadence
     uint32_t _lastTorqueMs = 0;     // torque poll cadence
+    uint32_t _lastLimitMs = 0;      // torque-limit poll cadence
     int32_t _posRefDrive = 0;       // drive register value at the reference
     int32_t _lastFwSteps = 0;       // previous poll's step count, to detect rest
     int32_t _lastDrive = 0;         // previous poll's drive value

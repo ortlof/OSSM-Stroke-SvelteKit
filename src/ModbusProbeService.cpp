@@ -256,10 +256,27 @@ void ModbusProbeService::probeLoop()
             pollTorque();
         }
 
+        // What the drive holds in P05-10 / P05-11, slow enough to stay out of
+        // the way of the torque and position polls. This is how the page can
+        // show the drive's own answer next to the setting.
+        if ((uint32_t)(millis() - _lastLimitMs) >= 5000U)
+        {
+            _lastLimitMs = millis();
+            pollTorqueLimits();
+        }
+
         if (modbusParamWritePending)
         {
             modbusParamWritePending = false;
             runParamWrite((int)modbusParamWriteReg, (int)modbusParamWriteValue);
+        }
+
+        // Settings-driven torque limits. A write is only queued when the value
+        // changes, so this does not fight the 5 s read-back below.
+        if (modbusTorqueLimitsPending)
+        {
+            modbusTorqueLimitsPending = false;
+            runTorqueWrite((int)modbusTorqueLimitsForward, (int)modbusTorqueLimitsReverse);
         }
 
         // Plain non-blocking loop: never sit on the UART or the state lock.
@@ -341,8 +358,9 @@ void ModbusProbeService::runProbe()
         tried += "reg1FE: ";
         if (rr == modbus_rtu::REPLY_OK)
         {
-            torque = (int)(uint16_t)(((uint16_t)reply[3] << 8) | reply[4]);
-            torqueRev = (int)(uint16_t)(((uint16_t)reply[5] << 8) | reply[6]);
+            // Magnitudes: the reverse register answers 0xF830 for -200.0 %.
+            torque = (int)modbus_rtu::torqueLimitMagnitude((uint16_t)(((uint16_t)reply[3] << 8) | reply[4]));
+            torqueRev = (int)modbus_rtu::torqueLimitMagnitude((uint16_t)(((uint16_t)reply[5] << 8) | reply[6]));
             tried += torque;
             tried += "/";
             tried += torqueRev;
@@ -372,6 +390,9 @@ void ModbusProbeService::runProbe()
         // What the drive holds right now, whether or not a write was requested.
         s.tfread = torque;
         s.trread = torqueRev;
+        if (torque >= 0) { s.tqLimitFwd = torque; }
+        if (torqueRev >= 0) { s.tqLimitRev = torqueRev; }
+        s.tqLimitOk = (torque >= 0) && (torqueRev >= 0);
         s.tried = tried;
         s.msg = found ? (String("reply on ") + winName) : String("no reply");
         return StateUpdateResult::CHANGED; },
@@ -478,8 +499,15 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
     uint8_t reply[MODBUS_RTU_READ_REPLY_MAX];
     uint8_t exc = 0;
 
+    // The drive stores the forward limit positive and the reverse limit
+    // negative (P05-10 is 0 .. +300.0 %, P05-11 is -300.0 % .. 0). The caller
+    // speaks magnitudes in 0.1 % of rated, so the sign goes on here and
+    // nowhere else.
+    uint16_t forwardWire = modbus_rtu::torqueLimitWireValue(true, forwardRaw);
+    uint16_t reverseWire = modbus_rtu::torqueLimitWireValue(false, reverseRaw);
+
     // --- forward, 0x01FE ---
-    uint8_t reqLen = modbus_rtu::buildWriteRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_FORWARD, (uint16_t)forwardRaw);
+    uint8_t reqLen = modbus_rtu::buildWriteRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_FORWARD, forwardWire);
     // Discard anything left in the receive buffer before asking, so what we parse
     // is the reply to THIS request. Without it a moving machine leaves stale frames
     // behind and a read silently returns the previous answer - which reads as a
@@ -492,11 +520,11 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
     Serial2.flush();
     size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
     modbus_rtu::ReadReply rrF = modbus_rtu::checkWriteReply(reply, got, MODBUS_PROBE_UNIT,
-                                                            MODBUS_TORQUE_REG_FORWARD, (uint16_t)forwardRaw, &exc);
+                                                            MODBUS_TORQUE_REG_FORWARD, forwardWire, &exc);
 
     // --- reverse, 0x01FF ---
     exc = 0;
-    reqLen = modbus_rtu::buildWriteRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_REVERSE, (uint16_t)reverseRaw);
+    reqLen = modbus_rtu::buildWriteRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_REVERSE, reverseWire);
     // Discard anything left in the receive buffer before asking, so what we parse
     // is the reply to THIS request. Without it a moving machine leaves stale frames
     // behind and a read silently returns the previous answer - which reads as a
@@ -509,7 +537,7 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
     Serial2.flush();
     got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
     modbus_rtu::ReadReply rrR = modbus_rtu::checkWriteReply(reply, got, MODBUS_PROBE_UNIT,
-                                                            MODBUS_TORQUE_REG_REVERSE, (uint16_t)reverseRaw, &exc);
+                                                            MODBUS_TORQUE_REG_REVERSE, reverseWire, &exc);
 
     // --- read both back, whatever the writes answered ---
     int fread = -1;
@@ -530,8 +558,9 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
     modbus_rtu::ReadReply rrBack = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
     if (rrBack == modbus_rtu::REPLY_OK)
     {
-        fread = ((int)reply[3] << 8) | (int)reply[4];
-        rread = ((int)reply[5] << 8) | (int)reply[6];
+        // Both are read back as magnitudes: 0x01FF answers 0xF830 for -200.0 %.
+        fread = (int)modbus_rtu::torqueLimitMagnitude((uint16_t)(((int)reply[3] << 8) | (int)reply[4]));
+        rread = (int)modbus_rtu::torqueLimitMagnitude((uint16_t)(((int)reply[5] << 8) | (int)reply[6]));
     }
 
     bool wrote = (rrF == modbus_rtu::REPLY_OK) && (rrR == modbus_rtu::REPLY_OK);
@@ -545,6 +574,16 @@ void ModbusProbeService::runTorqueWrite(int forwardRaw, int reverseRaw)
         s.trread = rread;
         s.twrote = wrote;
         s.tok = readbackOk;
+        // The drive's own view of the limits, refreshed by every write.
+        if (fread >= 0)
+        {
+            s.tqLimitFwd = fread;
+        }
+        if (rread >= 0)
+        {
+            s.tqLimitRev = rread;
+        }
+        s.tqLimitOk = readbackOk;
         if (readbackOk)
         {
             char head[56];
@@ -574,6 +613,20 @@ static int sStallCount = 0;
 volatile bool modbusParamWritePending = false;
 volatile int32_t modbusParamWriteReg = 0;
 volatile int32_t modbusParamWriteValue = 0;
+
+// Torque limits the settings hold, queued for this task. Magnitudes in 0.1 %.
+volatile bool modbusTorqueLimitsPending = false;
+volatile int32_t modbusTorqueLimitsForward = 0;
+volatile int32_t modbusTorqueLimitsReverse = 0;
+
+// The settings path calls this. It runs on the HTTP task and must not touch
+// Serial2, so it only leaves the values and a flag for the probe task.
+void ModbusProbeService::setTorqueLimits(int forwardMagnitude, int reverseMagnitude)
+{
+    modbusTorqueLimitsForward = forwardMagnitude;
+    modbusTorqueLimitsReverse = reverseMagnitude;
+    modbusTorqueLimitsPending = true;
+}
 
 void ModbusProbeService::pollTorque()
 {
@@ -642,6 +695,57 @@ void ModbusProbeService::pollTorque()
         s.tqAvg = v[5];
         s.tqPeak = v[6];
         s.tqOverload = v[7];
+        return StateUpdateResult::CHANGED; },
+           MODBUS_PROBE_ORIGIN);
+}
+
+// Read the two direction-specific torque limits and publish them as
+// magnitudes. Read only, and slow. The drive stores the reverse limit as a
+// negative number, so it is converted to a magnitude before it leaves here.
+void ModbusProbeService::pollTorqueLimits()
+{
+    openPort();
+
+    uint8_t request[MODBUS_RTU_REQUEST_LEN];
+    uint8_t reply[MODBUS_RTU_READ_REPLY_MAX];
+    uint8_t exc = 0;
+
+    while (Serial2.available())
+    {
+        Serial2.read();
+    }
+    uint8_t reqLen = modbus_rtu::buildReadRequest(request, MODBUS_PROBE_UNIT, MODBUS_TORQUE_REG_FORWARD, 2);
+    Serial2.write(request, reqLen);
+    Serial2.flush();
+    size_t got = readReply(Serial2, reply, sizeof(reply), MODBUS_PROBE_TIMEOUT_MS);
+    modbus_rtu::ReadReply rr = modbus_rtu::checkReadReply(reply, got, MODBUS_PROBE_UNIT, &exc);
+    if (rr != modbus_rtu::REPLY_OK)
+    {
+        // Keep the last known answer rather than inventing a healthy one.
+        update([](ModbusProbeState &s)
+               {
+            if (!s.tqLimitOk)
+            {
+                return StateUpdateResult::UNCHANGED;
+            }
+            s.tqLimitOk = false;
+            return StateUpdateResult::CHANGED; },
+               MODBUS_PROBE_ORIGIN);
+        return;
+    }
+
+    int fwd = (int)modbus_rtu::torqueLimitMagnitude((uint16_t)(((uint16_t)reply[3] << 8) | reply[4]));
+    int rev = (int)modbus_rtu::torqueLimitMagnitude((uint16_t)(((uint16_t)reply[5] << 8) | reply[6]));
+
+    update([&](ModbusProbeState &s)
+           {
+        if (s.tqLimitFwd == fwd && s.tqLimitRev == rev && s.tqLimitOk)
+        {
+            return StateUpdateResult::UNCHANGED;
+        }
+        s.tqLimitFwd = fwd;
+        s.tqLimitRev = rev;
+        s.tqLimitOk = true;
         return StateUpdateResult::CHANGED; },
            MODBUS_PROBE_ORIGIN);
 }

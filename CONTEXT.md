@@ -25,6 +25,15 @@ rather than re-deriving.
 - **The axis is vertical.** It holds its own carriage at **14.6 % torque ≈ 57 N**. Below about 15 % the carriage **drops** — this is how a stalled carriage and a falling one look identical to a step counter.
 - **Speed**: the drive's encoder says the machine reaches what it is asked for — 300 mm/s at 1913 rpm, dead steady. The firmware's own step-timing estimate is **worthless for peak measurement**: in one run it reported 30, 74, 36, 3, −299, 180, −298, 47 and reversed sign mid-stroke.
 - **Force**: `force_n = torque_feedback (0.1 %) × 3.8 N`. 100 % is 380 N at the rack.
+  Same number as a weight: `force_kg = force_n / 9.80665`, so 1.0 % is 0.3875 kgf.
+  At-rest reading is stable (mean −13.65 %, stdev 0.34 % over 12 s), so 1 kg along the
+  axis (2.58 %) is measurable. A reading taken seconds after a homing run is not
+  settled yet — one boot showed −5.3 % then −13.4 %.
+- **Torque limit registers**: `0x01FE` = P05-10 forward, `0x01FF` = P05-11 reverse,
+  scale 0.1 %. **The drive stores forward positive and reverse NEGATIVE** (vendor
+  table: P05-11 range `-300.0-0`, default −200.0; the drive reads +2000 / −2000).
+  A write with the wrong sign is echoed without complaint and does nothing defined.
+  P05-03..P05-09 in that block are unimplemented and answer with their own address.
 - **No lost steps**: 1 count = 0.011 mm across 260 mm of travel.
 - Measured envelope of about 84.8 % flash: at a 60 mm stroke ~300 mm/s, at 300 mm ~430–500 mm/s.
 
@@ -39,6 +48,10 @@ rather than re-deriving.
 - `0x0849/4A/4C` are d16/d17/d19 — **IO status bitfields, not alarm words.** Hours went
   into proving that. The alarm register is **still unidentified**; the reliable fault
   tells are the counters reading zero, or `drive_stalled`.
+- **Torque limits**: `0x01FE` (P05-10, forward) and `0x01FF` (P05-11, reverse), 0.1 %.
+  The reverse limit is a **negative** register value; the firmware now speaks
+  magnitudes and applies the sign in `modbus_rtu::torqueLimitWireValue()`. The drive
+  echoes a wrong-signed write without complaint, so always read back.
 - Parameter addresses: **hex(group × 100 + index)**. Verified against a documented
   default. P03-15 (position-deviation alarm) lives at `0x013B`, default 2000.
   The PC tool's XML tables are extracted in `/root/.hermes/cache/scratch/ihsv/`.
@@ -49,10 +62,18 @@ rather than re-deriving.
 
 - `POST /rest/signIn` (admin/admin) → `access_token`
 - `/rest/strokeState` — run, depth, stroke, speed, sensation, pattern, setup, position,
-  usable_travel, speed_measured, servo_state, homed
-- `/rest/strokeSettings`, `/rest/systemStatus`
+  usable, speed_measured, servo_state, homed
+- `/rest/strokeSettings` — machine geometry, motor, **and the torque limits**:
+  `torque_outward_pct`, `torque_inward_pct` (0..300), `torque_outward_forward`.
+  A change applies within ~100 ms and is written through to the drive.
 - `/rest/modbusProbe` — `torque_cmd/fb/avg/peak_pct`, `overload_pct`, `force_n`,
-  `speed_actual_mm_s`, `speed_peak_mm_s`, `drive_stalled`, `mb_*`, `param_write_*`
+  `force_kg`, `speed_actual_mm_s`, `speed_peak_mm_s`, `drive_stalled`, `mb_*`,
+  `param_write_*`, and the drive's own limit read-back `torque_limit_forward_pct` /
+  `torque_limit_reverse_pct` / `torque_limit_ok` (polled every 5 s).
+- **Web UI**: `/stroke` is the live control page; **`/setup` (menu "Machine Setup")
+  is where the torque limits are set** — outward and inward, each with its ceiling in
+  N and kgf, a swap switch, and the drive's read-back. Source
+  `interface/src/routes/setup/`. The page never changes the limits mid-pattern.
 
 ## Gotchas that cost real time
 
@@ -125,3 +146,9 @@ rather than re-deriving.
 5. The overlay's open/shut hover timing (400 ms) has never been judged by a human.
 6. Nudge caps are 15 points and vertical labels 10 points — both are candidates for
    enlargement if they are hard to hit or read at headset distance.
+7. **Which register is "outward" is not yet proven.** `torque_outward_forward`
+   defaults to true; confirm it with a slow jog at the machine and flip the switch in
+   Machine Setup if the carriage pushes when it should pull.
+8. **The 1 kg check has not been run yet.** The arithmetic and the at-rest noise floor
+   are recorded above; the mass has to go on a vertical axis (or on a pulley) to load
+   the axis at all.
