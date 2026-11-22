@@ -143,12 +143,20 @@ void ESP32SvelteKit::begin()
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Credentials", "true");
 #endif
 
+#if !defined(DISABLE_MDNS)
     ESP_LOGV(SVK_TAG, "Starting MDNS");
     MDNS.begin(_wifiSettingsService.getHostname().c_str());
     MDNS.setInstanceName(_appName);
     MDNS.addService("http", "tcp", 80);
     MDNS.addService("ws", "tcp", 80);
     MDNS.addServiceTxt("http", "tcp", "Firmware Version", APP_VERSION);
+#else
+    // mDNS is off: the machine is reached by IP everywhere (browser, HUD, OTA,
+    // archive push). It also removes the MDNS.end() teardown, which stalls while
+    // clients are connected and made POST /rest/restart sometimes answer without
+    // rebooting.
+    ESP_LOGV(SVK_TAG, "mDNS disabled by build flag");
+#endif
 
 #ifdef SERIAL_INFO
     Serial.printf("Running Firmware Version: %s\n", APP_VERSION);

@@ -68,7 +68,9 @@ void SleepService::sleepNow()
         callback();
     }
 
+#if !defined(DISABLE_MDNS)
     MDNS.end();
+    #endif
     delay(100);
     WiFi.disconnect(true);
     delay(200);

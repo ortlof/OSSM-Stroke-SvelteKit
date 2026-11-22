@@ -33,7 +33,9 @@ public:
     static void restartNow()
     {
         delay(250);
+#if !defined(DISABLE_MDNS)
         MDNS.end();
+        #endif
         delay(100);
         WiFi.disconnect(true);
         delay(200);
