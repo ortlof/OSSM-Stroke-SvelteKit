@@ -543,15 +543,30 @@ service over the internet rather than being pulled from it. That service is **LX
   measurement, not by argument: the stack (`upload_stack_free` reads ~11 kB free of
   16 kB *after* a handshake), the CA (the same binary opens a session when stopped), and
   the watchdog (that was the earlier, separate fault). What is left is something in the
-  capture-or-flush path taken only while the engine runs. **Do not run the machine with
-  Record armed until this is fixed**: a reset de-energises the drive, and on a vertical
-  axis that drops the carriage. The next step is the device's serial log from a
-  reproduction - a panic prints its own backtrace, and nothing else will name it.
-- **The stack and the handshake compete for the same DRAM.** At a 24 kB task stack the
-  largest contiguous heap block fell to 34,804 bytes and the handshake failed with
-  `X509 - Certificate verification failed` although the CA was correct; at 16 kB it is
-  45,044 and works. ~40 kB contiguous is the line. Ship 16 kB and keep the ring and the
-  POST body small.
+  capture-or-flush path taken only while the engine runs. **FIXED 22 Nov 2026, and the
+  cause was not the CA and not the motion.** The abort followed a retry storm: every
+  attempt is a full TLS handshake, each failed handshake left the heap more fragmented,
+  and an allocation elsewhere then threw `std::bad_alloc`, which aborts because nothing
+  catches it. Two defects made it worse and both were ours: `disableCore0WDT()` around the
+  handshake never really re-armed the watchdog, so it flooded the console with
+  `task_wdt: task not found` from the first upload until the next power-on **and left the
+  board unable to reset itself out of a hang**, and the retry had no cap. Now: the upload
+  task runs at idle priority (no watchdog call at all), the open gives up after 5 attempts
+  until the operator presses Record again, and a heap pre-flight refuses to open a socket
+  when there is nothing to hand it. The machine has since been run with Record armed and
+  moving and recorded a full session.
+- **The stack and the handshake compete for the same DRAM, and the line is ~50 kB.**
+  Measured on the real board: a 24 kB task stack put the largest contiguous block at
+  34,804 and the handshake failed with `X509 - Certificate verification failed` although
+  the CA was correct; at 16 kB it was 42,996-45,044 and it **still failed**. The numbers
+  that decide it are these, all measured: `max_alloc_heap` **45,044 FAILED**, **38,900
+  FAILED**, **53,236 SUCCEEDED**, **57,332 SUCCEEDED**. So "~40 kB is the line" was wrong
+  by a wide margin - a fresh handshake needs roughly 50 kB or more of CONTIGUOUS heap, and
+  the old note mistook a working case for the threshold. 0.7.3 cut the task stack to
+  **12 kB** (its own watermark shows only ~5.4 kB is ever touched - `upload_stack_free`
+  6,872 of 12,288) and cut the CA bundle to ISRG Root X2 alone, which removed the
+  RSA-4096 verification of X1 that the crash log had caught failing with `BIGNUM - Memory
+  allocation failed`. Result: the fresh-boot block went **57,332 -> 61,428**.
 - **A serial console is served at `/serial`** (`serial-console.html`, same gate as the
   dashboard). It exists because Web Serial needs a SECURE CONTEXT - a browser hands out
   serial ports to https or localhost and nothing else - and because a panic prints its own
@@ -560,11 +575,30 @@ service over the internet rather than being pulled from it. That service is **LX
   DTR/RTS low on connect so it does not reset a running machine, and has a "Copy for
   chat" that returns just the panic block. The same file also works opened directly
   (`file://` counts as a secure context), so no login is needed if it is opened locally.
-- **Heap leaks across TLS sessions, and it explains the resets better than motion did.**
-  Measured: 90,108 bytes free with a 45,044 largest block after a boot, and 45,308 free
-  with 28,660 largest after several sessions - below the ~40 kB a handshake needs. A
-  reset then happens even with the machine STANDING STILL. So "recording while moving
-  panics" was a correlation of timing, not the mechanism; treat the depleted heap as the
-  cause to chase, and say so rather than repeating the earlier attribution.
+- **There is no heap leak, and 28,660 is the WORKING level, not a dying one.** Corrected
+  22 Nov 2026: a completed handshake leaves the largest contiguous block at 28,660 and
+  keeps it there, because the client holds the TLS session - that is by design, not a
+  leak. And the session is REUSED: measured on 0.7.3, the first Record press took ~12 s to
+  open and left 28,660, and the next two presses opened in ~3 s each at that same 28,660
+  and closed cleanly. So the archive is not "dead until a reboot" after one session. What
+  does fail is a *fresh* handshake at that level - see the measured band in the stack note
+  above. "Recording while moving panics" was a timing correlation; the mechanism was the
+  uncapped retry storm.
+- **VERIFIED 22 Nov 2026: the archive records real moving play.** Session 12, firmware
+  0.7.3, axis vertical: Simple Stroke, depth 60 / stroke 40 / 20 mm/s, 34 s, and the
+  archive holds **381 samples, closed**, reading `min_pos 20.0`, `max_pos 60.0`,
+  `min_trq -15.9 %`, `max_trq +18.3 %` - exactly the commanded sweep, with a torque band
+  matching the earlier supervised runs (sessions 4 and 5: -15.3/+18.1, -16.7/+18.2), so
+  the uploader does not perturb the motion. **Read the `samples` table, not the live
+  REST state, when judging a sweep**: the polls aliased a 2 s half-stroke and reported
+  0.1-59.7 where the stored samples had the true 20.0-60.0.
+- **The drive exposes everything over REST.** `GET /rest/modbusProbe` returns the probe
+  state, `POST /rest/modbusProbe {"read_reg":N,"read_count":M}` queues a READ-ONLY
+  Modbus function-3 range read (the reply returns the PREVIOUS read, so read twice).
+  `/rest/features` does NOT list endpoints - grep the `*_ENDPOINT_PATH` defines.
 - **Open:** the Windows overlay binary in `dist/` predates the Record button until it is
-  rebuilt; and a supervised motion run is still needed to see samples arrive.
+  rebuilt. The firmware publishes `mb_lost_counts` / `mb_lost_mm_milli` as a
+  reference-alignment artefact - it read 165 mm of "lost steps" while the drive's own
+  counters agreed exactly (deviation 0), so that telemetry is a phantom and wants fixing
+  or removing. The archive holds empty test rows 6-11 alongside the real runs 3, 4, 5 and
+  12.

@@ -103,7 +103,17 @@ void SessionUploadService::begin()
     // every idle loop - thousands of lines a second, for the rest of the uptime,
     // with the watchdog dead. At the idle priority the scheduler time-slices this
     // task against the idle task, so the watchdog is fed without being touched.
-    xTaskCreatePinnedToCore(taskEntry, "sessionUpload", 16384, this, 0, &_taskHandle, 0);
+    // 12 kB, and the number is a MEASUREMENT, not a guess. This task's stack comes
+    // out of the same DRAM as the TLS handshake's one large contiguous allocation,
+    // and the project measured that stack size moving `max_alloc_heap` directly:
+    // at 24576 the largest block fell to 34,804, at 16384 it was 42,996. The
+    // archive now needs that block to be larger than this board reliably offers
+    // after a day of running (45,044 failed, 53,236 worked), so the stack gives back
+    // what it can spare. It CAN spare it: `upload_stack_free` reports about 10,968
+    // of 16,384 unused, i.e. only ~5.4 kB is ever touched, so 12,288 still leaves
+    // more than double the measured need. Do not go below 12 kB - at 8192 the
+    // device reset during the handshake.
+    xTaskCreatePinnedToCore(taskEntry, "sessionUpload", 12288, this, 0, &_taskHandle, 0);
 }
 
 void SessionUploadService::taskEntry(void *param)
@@ -134,12 +144,15 @@ void SessionUploadService::captureLoop()
         // Signed difference, so the millis() wrap does not matter.
         const bool retryDue = ((int32_t)(millis() - _retryAfterMs) >= 0);
 
-        // A released Record clears the give-up latch: the next press is a fresh
-        // run of attempts, and an operator who leaves Record alone cannot keep the
-        // retry storm alive.
+        // A released Record clears the give-up latch AND the failure counter: the
+        // next press is a fresh run of attempts, and an operator who leaves Record
+        // alone cannot keep the retry storm alive. Clearing only the latch is a bug
+        // that shipped once: the counter stayed at the limit, so the next press
+        // gave up instantly with zero attempts.
         if (!wantRecording && !_recording)
         {
             _gaveUp = false;
+            _consecutiveFailures = 0;
         }
 
         const char *status = "idle";

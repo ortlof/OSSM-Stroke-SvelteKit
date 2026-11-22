@@ -68,12 +68,14 @@
 // The next Record press starts a fresh run of attempts.
 #define SESSION_UPLOAD_OPEN_MAX_TRIES 5
 
-// Do not even open a socket below this much largest CONTIGUOUS heap. Measured on
-// a healthy board: max_alloc_heap is about 57 kB, while a handshake at 34.8 kB
-// already fails with "X509 - Certificate verification failed" even with a
-// correct CA. The guard reports the real number when it refuses, so the true
-// floor is read from the log instead of guessed here.
-#define SESSION_UPLOAD_MIN_MAX_ALLOC 32000
+// Do not even open a socket below this much largest CONTIGUOUS heap. The number
+// is a MEASURED floor, and the first attempt at it was wrong in the expensive
+// direction: 32,000 is ABOVE the normal steady state of this board, because a
+// completed handshake leaves about 28,660 contiguous, so the guard blocked the
+// flush and the close of every session that had just opened. What actually stops
+// the cascade is the attempt cap below, not this; the guard is only here so a
+// hopeless heap does not start a handshake that cannot finish.
+#define SESSION_UPLOAD_MIN_MAX_ALLOC 20000
 #define SESSION_UPLOAD_CAPTURE_MS 100
 #define SESSION_UPLOAD_FLUSH_MS 5000
 #define SESSION_UPLOAD_TIMEOUT_MS 7000
