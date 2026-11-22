@@ -18,6 +18,7 @@ rather than re-deriving.
 | Deliverables | `/root/ossm-refactor/dist/`, served on `:8099` by the `ossm-dist` systemd unit |
 | Machine | `192.168.2.115` (LAN via Tailscale subnet route), login admin/admin |
 | Windows test box | `10.99.10.51`, user `buildwin`, key `~/.ssh/id_ed25519_win` |
+| Upstream patterns | `/root/ossm-refactor/LUST-motion` — `openlust/LUST-motion`, **public** (no token needed); its `lib/Pattern/` is the refactored pattern library |
 
 ## Machine facts — measured, not assumed
 
@@ -93,6 +94,40 @@ rather than re-deriving.
   the tool call.
 - In Rust, uppercase locals are **const patterns**: `let GAP = x;` fails with
   "refutable pattern in local binding". Bind lowercase.
+
+## Pattern library — reviewed, with the upstream to compare against
+
+`lib/StrokeEngine/src/pattern.h` is one 1120-line file. Patterns work in
+**absolute steps** and each one holds `_depth`, `_stroke` and its own speed and
+acceleration maths. Upstream `openlust/LUST-motion` has a refactored `lib/Pattern/`:
+one class per file, patterns emit a position in **0..stroke, in mm**, only —
+`nextTarget(index, retract)`, `_infinite = 1e30` to ask for machine maximum, and a
+`StrokeEngineSafeGuard` that turns the relative request into an absolute, clipped
+motion. Its `PatternMath.h` is the same logic, only reformatted, so the two trees
+compute the same numbers.
+
+How it was reviewed: a host harness (`/root/.hermes/cache/scratch/patterncheck/`)
+compiles the **real** `pattern.h` against small Arduino stubs and prints what every
+pattern commands for a range of indices and sensations. Reasoning about the code
+found less than running it did.
+
+| Pattern | Error | State |
+| --- | --- | --- |
+| Insist | the stroke fraction `(100-|s|)/100` is exactly 0 at the ±100 the engine clamps to, and `_acceleration` divides by it. Measured **−25,300,232 mm/s² and zero travel**, so the engine clipped the acceleration to 1 step/s² and the machine stopped | **fixed** (floor 0.05) |
+| Stop'n'Go | `_isStillDelayed()` compared against `_startDelayMillis + delay`, i.e. against **absolute uptime** before the first `_startDelay()`, so the pattern sat out its first pause after every boot — up to 10 s at sensation +100. `_startDelayMillis` was an `int` holding a `millis()` value | **fixed** |
+| Deeper | printed on **every stroke** through `DEBUG_PATTERN`, which was the last debug switch still on: `String` building means malloc and float formatting on the motion task, 6 kB stack | **fixed** (off) |
+| Deeper | `slope = _stroke / _countStrokesForRamp` is integer division, so a stroke shorter than the ramp count gives slope 0 and a silent no-move | open, low risk |
+| Teasing/Pounding | at sensation +100 it asks 1000 mm/s and 33334 mm/s², above the machine's 660 and 10000; the engine clips, so the stroke then takes longer than the commanded time | by design |
+| JackHammer, StrokeNibbler | store the FULL stroke time but divide by it as if it were the half-stroke time (all speeds half of intended); `index != _index` is unsigned against int | dead code, not in the table |
+
+**Insist and the Stop'n'Go timer are still broken upstream** — checked on `main`
+and on every branch of LUST-motion. Report them; do not assume a fix is coming.
+LUST-motion also has no `SimpleStroke` and no `Knot`.
+
+Porting the LUST-motion architecture is the better build, but it is an **engine**
+change and not a pattern change: our engine owns the depth offset and the clipping
+in `_applyMotionProfile()`, theirs moves both into `SafeGuard`. Not done — there is
+no hardware on this box to re-verify motion against.
 
 ## Overlay HUD, current state
 
