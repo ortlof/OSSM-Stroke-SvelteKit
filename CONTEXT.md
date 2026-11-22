@@ -96,6 +96,63 @@ rather than re-deriving.
 - In Rust, uppercase locals are **const patterns**: `let GAP = x;` fails with
   "refutable pattern in local binding". Bind lowercase.
 
+## Where the flash goes, and what is worth reclaiming
+
+Measured from the linker map (`firmware.map`, the block after "Linker script and
+memory map" — everything earlier is discarded sections and double-counts) and from
+the symbols in the ELF. The slot is 1,966,080 bytes on the plain ESP32
+(`min_spiffs.csv`); the S3 uses the 8 MB layout and is not tight.
+
+| Component | Bytes | Note |
+| --- | --- | --- |
+| Embedded web UI | 247,897 | `ESP_SVELTEKIT_DATA_0..8`, the gzipped SvelteKit bundle. **14.8 % of the image and the biggest single removable item.** `ESP_SVELTEKIT_DATA_5` alone is 194,498. |
+| newlib `libc.a` | 206,000 | `_svfprintf_r` 11 210, `_vfprintf_r` 11 429, the rest locale/stdio |
+| WiFi stack | ~485,000 | net80211 163 k, lwIP 138 k, wpa_supplicant 64 k, pp 56 k, phy 32 k, mDNS 32 k |
+| ESP32-SvelteKit framework | ~124,000 | 372 k in total, less the 248 k UI it carries |
+| FastAccelStepper | 130,000 | the step engine — needed |
+| `libstdc++` | 118,000 | |
+| mbedTLS | 83,000 + | only if anything still uses TLS |
+| Our app + StrokeEngine + 15 patterns | 72,000 | |
+| PsychicHttp | 49,000 | |
+| `libFrameworkArduino.a` | 44,907 | the Arduino core — the whole of what "leave Arduino" would remove |
+| FastLED | 0 | was 52 k, removed — see below |
+
+### Leaving PlatformIO saves nothing; leaving Arduino saves almost nothing
+
+**PlatformIO is a build system and a package manager. It puts 0 bytes in the image.**
+It compiles the same sources with the same toolchain; ESP-IDF's own build would
+produce the same binary. Any claim of a flash saving there is wrong.
+
+**Arduino is ESP-IDF plus a layer, not an alternative to it.** The heavy parts —
+the 485 kB WiFi stack, 206 kB newlib, 118 kB libstdc++, FreeRTOS, mbedTLS — are
+ESP-IDF and stay under either toolchain. Measured, the Arduino-only part is
+`libFrameworkArduino.a` at **44,907 bytes**, plus ~139 kB of Arduino-flavoured
+libraries (HTTPClient, WiFi, Network, FS, SD, Update, OTA, mDNS, LittleFS, Hash,
+Ethernet) that are *functionality*, not overhead — moving to plain IDF means
+re-implementing them. So the honest ceiling for leaving Arduino is about
+**45–60 kB, in exchange for rewriting the HTTP server, OTA, filesystem, WiFi and
+the whole framework integration.** Not worth it. **Decision: stay on Arduino.**
+
+### What was actually reclaimed
+
+- **FastLED: 52 kB, removed.** It was declared as a dependency and pulled 81 kB into
+  the link, but nothing referenced it — the only occurrence of the name outside
+  `.pio` was the dependency line itself, and its only contribution to the image was
+  the global `CFastLED` object and its constructor, kept alive by its own static
+  initialiser. Removing the dependency took Flash from 85.0 % to 82.4 % and left
+  zero FastLED symbols in the image. 289 kB free became **339 kB free**.
+
+### Deliberately not done
+
+- **Moving the web UI off the device would free 248 kB**, but the machine would stop
+  serving its own UI — the LAN dist server (already on :8099) or another host would
+  have to serve it. That is a product decision, not a technical one, and with 339 kB
+  free there is no pressure to make it.
+- **The TLS stack (mbedTLS 83 kB + `NetworkClientSecure` 14 kB + cert bundle 16 kB,
+  roughly 120–150 kB)** is only reclaimable if nothing uses TLS. `FT_MQTT` and
+  `FT_NTP` are off, so it may already be dead weight — but that needs an audit of
+  what still opens a secure connection (OTA, the cert store) before touching it.
+
 ## Pattern library — 15 patterns from two upstreams
 
 `lib/StrokeEngine/src/` holds `Pattern.h` (base), **one file per pattern**, and
@@ -121,13 +178,19 @@ The table (indices are stable; the last six were appended):
 
 | # | Name | Note |
 | --- | --- | --- |
-| 0–8 | Simple Stroke, Teasing or Pounding, Robo Stroke, Half'n'Half, Deeper, Stop'n'Go, Insist, Knot, RandomDepth | as before |
+| 0–6 | Simple Stroke, Teasing or Pounding, Robo Stroke, Half'n'Half, Deeper, Stop'n'Go, Insist | as before |
+| 7 | **Knot Short** | ours: creeps the last stretch and stops **short** of full depth |
+| 8 | **Random Depth** | LUST: random insertion depth, full return every stroke |
 | 9 | Half'n'Out | every second cycle pulls only half way out; the insertion is always full |
 | 10 | Progressive | the sweep walks in over a cycle in sensation-sized segments |
-| 11 | Knot Stroke | out, in to a sensation point, then a slow push to full depth — **a different pattern from Knot**, which stops short instead |
+| 11 | **Knot Deep** | fray-d: out, in to a sensation point, then a slow push **all the way in** |
 | 12 | Slap | out at half speed, pause, then 90 % and 100 % hard |
-| 13 | Random Stroke | a random target at least a sensation-set distance from the last |
+| 13 | **Random Target** | fray-d: jumps to a random point, at least a sensation-set distance apart |
 | 14 | Point | park at one point inside the sweep |
+
+Two patterns came out of each of two upstreams doing similar-sounding things, so
+the names say which is which. Class names and indices are unchanged, so no stored
+state and no client breaks.
 
 **Nothing upstream describes the six fray-d patterns.** Its `Pattern.mdx` documents
 only indices 0–6 and even says Jack Hammer and Stroke Nibbler are "available in the
