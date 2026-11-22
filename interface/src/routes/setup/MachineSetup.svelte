@@ -31,6 +31,13 @@
 		force_n: number;
 		force_kg: number;
 		torque_fb_pct: number;
+		// Signed by the direction of travel: positive outward, negative back to
+		// home, and the raw drive sign while the carriage stands still.
+		torque_directed_pct: number;
+		force_directed_n: number;
+		force_directed_kg: number;
+		// -1 back to home, 0 holding, +1 outward.
+		travel_direction: number;
 	}
 
 	let settings: TorqueSettings = $state({
@@ -44,8 +51,21 @@
 		torque_limit_ok: false,
 		force_n: 0,
 		force_kg: 0,
-		torque_fb_pct: 0
+		torque_fb_pct: 0,
+		torque_directed_pct: 0,
+		force_directed_n: 0,
+		force_directed_kg: 0,
+		travel_direction: 0
 	});
+	// What the signed torque means right now, in words, so the sign is never a
+	// guess: outward is positive, back to home is negative.
+	let directionWord = $derived(
+		drive.travel_direction > 0
+			? 'outward'
+			: drive.travel_direction < 0
+				? 'back to home'
+				: 'holding, not travelling'
+	);
 	let busy = $state(false);
 	let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -83,7 +103,11 @@
 					torque_limit_ok: all.torque_limit_ok,
 					force_n: all.force_n,
 					force_kg: all.force_kg,
-					torque_fb_pct: all.torque_fb_pct
+					torque_fb_pct: all.torque_fb_pct,
+					torque_directed_pct: all.torque_directed_pct,
+					force_directed_n: all.force_directed_n,
+					force_directed_kg: all.force_directed_kg,
+					travel_direction: all.travel_direction
 				};
 			}
 		} catch (error) {
@@ -260,17 +284,25 @@
 			</div>
 			<div class="stat">
 				<div class="stat-title">Torque now</div>
-				<div class="stat-value text-2xl">{drive.torque_fb_pct.toFixed(1)} %</div>
+				<div class="stat-value text-2xl">{drive.torque_directed_pct.toFixed(1)} %</div>
 				<div class="stat-desc">
-					{drive.force_n.toFixed(0)} N, about {drive.force_kg.toFixed(2)} kgf
+					{drive.force_directed_n.toFixed(0)} N, about {drive.force_directed_kg.toFixed(2)} kgf
+				</div>
+				<div class="stat-desc">
+					{directionWord} · drive register {drive.torque_fb_pct.toFixed(1)} %
 				</div>
 			</div>
 		</div>
 
 		<div class="label">
 			The live force is the drive's estimate of its own electromagnetic torque, converted at 3.8 N
-			per percent. On a vertical axis that number carries the carriage's own weight and whatever is
-			on it; the kgf figure is that force read as an equivalent hanging mass, not a weighing.
+			per percent. Its sign follows the direction of travel: positive while the machine works
+			outward, negative on the way back to home, with the direction named underneath. On a vertical
+			axis the number carries the carriage's own weight and whatever is on it; the kgf figure is
+			that force read as an equivalent hanging mass, not a weighing. While the carriage stands
+			still there is no travel to sign by, so the drive's own sign stands — negative, because
+			holding the carriage towards home means pushing up against gravity. The line under the value
+			also carries the raw register, so it can still be compared against the drive's own display.
 		</div>
 	</div>
 </SettingsCard>

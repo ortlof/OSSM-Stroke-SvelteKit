@@ -41,6 +41,24 @@ rather than re-deriving.
   the added mass: it read −7.62 kg at rest with the 3.09 kg on. Readings:
   no load at 0 mm −13.65 %; load at 0 mm −19.65 %; **load at 60 mm −21.73 %**
   (stdev 0.71); load back at 0 mm −16.50 %.
+- **Torque is displayed signed by direction of travel** (measured 2026-11-22, 20 mm/s,
+  40 mm sweep, `Simple Stroke`, load on): **outward +23.7 %**, **back to home −14.1 %**,
+  at rest −16.5 %. The raw register is negative in BOTH directions (−23.7 out, −14.1
+  home) because it carries the gravity bias rather than the travel direction, so the
+  sign has to come from the direction of travel. It does: the firmware tracks the sign
+  of the position delta at 10 Hz (`strokeTravelDirection` in `main.cpp`) and
+  `ModbusProbeService::read()` exposes `torque_directed_pct`, `force_directed_n`,
+  `force_directed_kg` and `travel_direction` (−1 home, 0 holding, +1 outward) beside the
+  raw fields. At a standstill there is no travel to sign by and the drive's own sign
+  stands, which is negative because holding the carriage towards home means pushing up.
+  **Position, not the drive's rpm, is the source**: the frame that decides what "outward"
+  means is this one, and the position makes the mapping true by construction.
+- **The drive's speed register is inverted relative to the position frame**: outward
+  travel reads **−10.9 mm/s** and travel back to home **+12.5 mm/s** on `0x0842` d08. If
+  the drive's own "forward" is positive, then outward is the drive's reverse direction
+  and the outward torque limit belongs in `0x01FF` (P05-11), i.e.
+  `torque_outward_forward` should be **false** — that inference is not yet confirmed by a
+  load test, see Open items.
 - **Torque limit registers**: `0x01FE` = P05-10 forward, `0x01FF` = P05-11 reverse,
   scale 0.1 %. **The drive stores forward positive and reverse NEGATIVE** (vendor
   table: P05-11 range `-300.0-0`, default −200.0; the drive reads +2000 / −2000).
@@ -400,14 +418,32 @@ flash and the pattern table are verified; the carriage has not moved.
 5. The overlay's open/shut hover timing (400 ms) has never been judged by a human.
 6. Nudge caps are 15 points and vertical labels 10 points — both are candidates for
    enlargement if they are hard to hit or read at headset distance.
-7. **Which register is "outward" is not yet proven.** `torque_outward_forward`
-   defaults to true; confirm it with a slow jog at the machine and flip the switch in
-   Machine Setup if the carriage pushes when it should pull.
-8. **The mass check is done and it works** (see the force bullet above): 3.093 kg read as
+7. **Which register is "outward" is still not proven, but there is now evidence.**
+   Measured: outward travel reads **negative** on the drive's speed register (d08
+   `0x0842`), travel back to home reads positive. If the drive's forward is positive rpm,
+   outward is the drive's reverse direction, so the outward torque limit belongs in
+   `0x01FF` (P05-11) and `torque_outward_forward` should be **false** — it currently
+   defaults to **true**. That is an inference from the speed register, not a load test:
+   confirm it by setting the outward limit low, running the machine into a load on an
+   outward move, and seeing whether it is the outward direction that loses force. On a
+   vertical axis never do that by lowering the limit to provoke a stall — the carriage
+   drops; use the position-deviation alarm instead.
+8. **A homing run can measure almost no travel, and the firmware then blames the stroke
+   length.** After one OTA the sensorless homing reported **5 mm** of travel (drive
+   encoder showed ~9 mm of movement), which clamped `usable_travel` to 0 and made every
+   run refuse with "Set a stroke length first". The next boot homed correctly (377 mm),
+   so it was transient — but the sensorless homing trips on a hardcoded **2.5 %** current
+   threshold (`main.cpp`, `motorProperties.currentLimit`), and a load on a vertical axis
+   draws more current, so a load can trip it inside the first millimetre. The firmware
+   now pushes "Homing found N mm of travel - re-home before running" instead of staying
+   silent. `physicalTravel` is the MEASURED value (`abs(position)/steps_per_mm` after the
+   homing run), and nothing falls back to the configured 377 when a measurement is
+   implausible — that fallback is still an open decision.
+9. **The mass check is done and it works** (see the force bullet above): 3.093 kg read as
    −3.131 kg, 1.2 % error, measured at 60 mm away from the end stop. At position 0 it
    reads short, because the stop carries part of the weight. Use it as a load monitor
    rather than a scale, and take the reading mid-travel, never parked.
-9. **The pattern port is motion-verified (192.168.2.115, supervised, 20 mm/s,
+10. **The pattern port is motion-verified (192.168.2.115, supervised, 20 mm/s,
    depth 60 / stroke 40 except where noted).** Simple Stroke sweeps 20.1↔59.4 mm at
    20.3 mm/s with reversals at both ends, full stroke ≈ 6 s as the engine derives.
    Random Depth inserts to a different depth every stroke and always returns the full
@@ -416,7 +452,7 @@ flash and the pattern table are verified; the carriage has not moved.
    Not yet done on hardware: the Stop'n'Go **boot** case, which needs a run within
    ~10 s of power-up because that is the window the old absolute-uptime gate closed.
    The host harness proves that one case at every uptime.
-10. **The slow-start slider and the pull-out button are motion-verified** (2026-11-22,
+11. **The slow-start slider and the pull-out button are motion-verified** (2026-11-22,
    supervised, 3.093 kg on the carriage, 20 mm/s, depth 60 / stroke 40). Knot Short's
    fast phase ended at **28.1 mm** with `slow_start` 20 % and at **52.0 mm** with 80 % —
    the two values a share of the 40 mm stroke puts them at — with the creep filling the
@@ -424,7 +460,7 @@ flash and the pattern table are verified; the carriage has not moved.
    mid-pattern**: the carriage went 51.8 → 0.0 mm in about 1.6 s (≈37 mm/s against the
    40 mm/s command), the pattern stopped, and `run` went false. On its own it took
    59.8 → 0.0 mm in ~1.6 s. The machine moved the 3.09 kg load without complaint.
-11. **The six fray-d patterns and the re-derived Knot are motion-verified** (same
+12. **The six fray-d patterns and the re-derived Knot are motion-verified** (same
    supervised setup, 20 mm/s, depth 60 / stroke 40). Knot Short: the full cycle now
    completes in ~12 s, twice the commanded stroke time, and reaches the stop-short
    target 56.8 mm; the creep runs at ~3.3 mm/s, up from 0.4. Knot Deep: 20 → 40 (the

@@ -90,6 +90,20 @@ volatile float strokeUsableTravelMm = 0.0f;
 volatile float strokeHomeMarginMm = 15.0f;
 volatile float strokeFarMarginMm = 15.0f;
 
+// Which way the carriage is travelling, in the machine's own frame: +1 outward
+// (deeper, a growing position), -1 back towards home, 0 standing still. The Modbus
+// probe's JSON updater reads it to sign the torque by direction; see
+// ModbusProbeService.h for why it is a plain global.
+volatile int strokeTravelDirection = 0;
+
+// Direction detection for that readout. Position is reported to 0.1 mm, so the
+// deadband sits just under one reported step, and the direction is held for a
+// moment after motion stops because the probe polls and the browser reads at
+// different rates: without the hold, a reading taken in the gap between two ticks
+// would say "holding" and be read as the wrong direction.
+#define STROKE_DIRECTION_DEADBAND_MM 0.05f
+#define STROKE_DIRECTION_HOLD_MS 800U
+
 // Measured speed, computed here from the driver position with microsecond
 // timing. A client cannot do this: the 10 Hz WebSocket stream jitters with the
 // network, so every slope a client computes is noise. This number is the real
@@ -513,6 +527,37 @@ void syncStrokeStateTask(void *pvParameters)
         modbusFirmwareSteps = stepperDriver.getCurrentPosition();
         float positionMm = roundf(rawMm * 10.0f) / 10.0f;
 
+        // --- which way the carriage is going, for the signed torque readout ----
+        // A growing position is outward (deeper), a shrinking one is back towards
+        // home. Taken from the position delta rather than the drive's signed rpm,
+        // because this frame is the one that defines "outward" and the encoder's
+        // polarity is not established. The direction is held for a moment after
+        // motion stops so a reading taken between two ticks cannot flicker.
+        {
+            static float lastDirectionPosition = 0.0f;
+            static bool directionSeeded = false;
+            static uint32_t lastMotionMs = 0;
+
+            if (!directionSeeded)
+            {
+                lastDirectionPosition = positionMm;
+                directionSeeded = true;
+            }
+
+            float deltaMm = positionMm - lastDirectionPosition;
+            if (fabsf(deltaMm) >= STROKE_DIRECTION_DEADBAND_MM)
+            {
+                strokeTravelDirection = (deltaMm > 0.0f) ? 1 : -1;
+                lastDirectionPosition = positionMm;
+                lastMotionMs = millis();
+            }
+            else if (strokeTravelDirection != 0 &&
+                     (uint32_t)(millis() - lastMotionMs) > STROKE_DIRECTION_HOLD_MS)
+            {
+                strokeTravelDirection = 0;
+            }
+        }
+
         // Measured speed over the last period, from the unsmoothed position and
         // the real elapsed microseconds.
         int64_t nowUs = esp_timer_get_time();
@@ -535,6 +580,34 @@ void syncStrokeStateTask(void *pvParameters)
         float travel = strokingMachine.physicalTravel;
         float usable = travel - (2.0f * strokingMachine.keepoutBoundary);
         strokeUsableTravelMm = (usable > 0.0f) ? usable : 0.0f;
+
+        // A homing run that finds almost no travel leaves every sweep clamped to
+        // nothing, and a run is then refused with "Set a stroke length first" -
+        // which names the wrong problem and sends the operator looking at the
+        // sliders. Say what is actually wrong, once per occurrence.
+        //
+        // This is not hypothetical: the sensorless homing trips on a CURRENT
+        // threshold (a hardcoded 2.5 %, main.cpp), so a load on the carriage can
+        // trip it within the first millimetre. Measured: with 3.093 kg on, a
+        // post-flash homing reported 5 mm of travel and the machine then refused
+        // every run. Integer formatting only, for the stack reason above.
+        {
+            static bool warnedAboutTravel = false;
+            const bool travelTooSmall = (strokeUsableTravelMm <= 0.0f);
+            if (travelTooSmall && !warnedAboutTravel)
+            {
+                warnedAboutTravel = true;
+                char msg[96];
+                snprintf(msg, sizeof(msg),
+                         "Homing found %d mm of travel - re-home before running",
+                         (int)travel);
+                esp32sveltekit.getNotificationService()->pushNotification(msg, PUSHWARNING);
+            }
+            else if (!travelTooSmall)
+            {
+                warnedAboutTravel = false;
+            }
+        }
 
         strokeStateService.update([&](StrokeState &state)
                                   {

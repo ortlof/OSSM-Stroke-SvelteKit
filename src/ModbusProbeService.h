@@ -52,6 +52,18 @@
 #define MODBUS_PROBE_ENDPOINT_PATH "/rest/modbusProbe"
 #define MODBUS_PROBE_ORIGIN "modbusProbe"
 
+// Which way the carriage is travelling, in the machine's own frame: +1 outward
+// (deeper, a growing position), -1 back towards home, 0 standing still. main.cpp
+// owns it and updates it from the position delta at 10 Hz. It is a plain global
+// for the same reason StrokeStateService.h uses one: the JSON updater needs it,
+// that updater runs under the state mutex, and the value belongs to another task.
+//
+// Why the position delta and not the drive's signed rpm: this frame is the one
+// that decides what "outward" means, and the sign of the drive's encoder is not
+// established. Deriving the direction from the position makes the mapping true by
+// construction instead of by an assumption about wiring.
+extern volatile int strokeTravelDirection;
+
 // One drive on one point-to-point link: unit id 1, addressed directly.
 #define MODBUS_PROBE_UNIT 1
 #define MODBUS_PROBE_TIMEOUT_MS 150
@@ -232,6 +244,23 @@ public:
         root["force_kg"] = state.forceN / 9.80665f;
         root["torque_cmd_pct"] = state.tqCmd / 10.0f;
         root["torque_fb_pct"] = state.tqFb / 10.0f;
+        // The same reading signed by the direction of travel, for the operator:
+        // positive while the drive works outward, negative while it works back
+        // towards home. The raw fields above stay as the drive reports them, so a
+        // number here can still be compared against the drive's own display.
+        //
+        // At a standstill there is no travel to sign by, so the drive's own sign
+        // stands. On a vertical axis that is negative: the drive is holding the
+        // carriage towards home, i.e. up, against gravity.
+        const float directedPct =
+            (strokeTravelDirection == 0) ? (state.tqFb / 10.0f)
+          : (strokeTravelDirection > 0) ? fabsf(state.tqFb / 10.0f)
+                                        : -fabsf(state.tqFb / 10.0f);
+        root["torque_directed_pct"] = directedPct;
+        root["force_directed_n"] = directedPct * 3.8f;
+        root["force_directed_kg"] = (directedPct * 3.8f) / 9.80665f;
+        // -1 back to home, 0 holding, +1 outward.
+        root["travel_direction"] = (int)strokeTravelDirection;
         root["torque_avg_pct"] = state.tqAvg / 10.0f;
         root["torque_peak_pct"] = state.tqPeak / 10.0f;
         root["overload_pct"] = state.tqOverload / 10.0f;
