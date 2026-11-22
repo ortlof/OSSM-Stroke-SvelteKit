@@ -17,7 +17,11 @@
 #include <string.h>
 #include "PatternMath.h"
 
-#define DEBUG_PATTERN                 // Print some debug informations over Serial
+// Debug prints stay OFF. Every one of them builds String objects, which means
+// malloc and float formatting, and nextTarget() runs on the motion task with a
+// 6 kB stack. Deeper::nextTarget would print on every single stroke. The engine
+// keeps DEBUG_STROKE and DEBUG_CLIPPING off for the same reason.
+//#define DEBUG_PATTERN                 // Print some debug informations over Serial
 
 #ifndef STRING_LEN
   #define STRING_LEN           64     // Bytes used to initialize char array. No path, topic, name, etc. should exceed this value
@@ -118,14 +122,18 @@ class Pattern {
         virtual void setSpeedLimit(unsigned int maxSpeed, unsigned int maxAcceleration, unsigned int stepsPerMM) { _maxSpeed = maxSpeed; _maxAcceleration = maxAcceleration; _stepsPerMM = stepsPerMM; } 
 
     protected:
-        int _stroke;
-        int _depth;
-        float _timeOfStroke;
+        // StrokeEngine sets all three before the first nextTarget(). The
+        // initialisers are belt and braces: an uninitialised _timeOfStroke is a
+        // divide by zero in every pattern that derives its speed from it.
+        int _stroke = 0;
+        int _depth = 0;
+        float _timeOfStroke = 1.0f;
         float _sensation = 0.0;
         int _index = -1;
         char _name[STRING_LEN]; 
         motionParameter _nextMove = {0, 0, 0, false};
-        int _startDelayMillis = 0;
+        unsigned long _startDelayMillis = 0;
+        bool _delayRunning = false;
         int _delayInMillis = 0;
         unsigned int _maxSpeed = 0;
         unsigned int _maxAcceleration = 0;
@@ -140,6 +148,7 @@ class Pattern {
         */
         void _startDelay() {
             _startDelayMillis = millis();
+            _delayRunning = true;
         } 
 
         /*! 
@@ -157,7 +166,16 @@ class Pattern {
           @return True, if the timer is running, false if it is expired.
         */
         bool _isStillDelayed() {
-            return (millis() > (_startDelayMillis + _delayInMillis)) ? false : true; 
+            // No delay has been started yet, so nothing is pending. Without
+            // this the test compares against _startDelayMillis == 0, i.e. against
+            // absolute uptime, and a pattern would sit out its first delay after
+            // every boot while millis() catches up.
+            if (_delayRunning == false) {
+                return false;
+            }
+            // Subtraction, not addition: this survives the millis() rollover at
+            // 49.7 days. The old form used int arithmetic on a millis() value.
+            return ((unsigned long)(millis() - _startDelayMillis) < (unsigned long)_delayInMillis);
         }
 
         /*!
@@ -618,6 +636,16 @@ class StopNGo : public Pattern {
   strokes will wander towards the front, with negative values towards the back.
 */
 /**************************************************************************/
+
+// The shortest stroke Insist may ask for, as a fraction of the full stroke.
+// sensation +/-100 used to map to exactly 0, which made the acceleration a
+// division by zero (measured: -25,300,232 mm/s^2, and both endpoints landed on
+// the same position, so the machine simply stopped). The engine clamps
+// sensation to exactly +/-100, so that value is reachable from the UI.
+#ifndef INSIST_MIN_STROKE_FRACTION
+#define INSIST_MIN_STROKE_FRACTION 0.05f
+#endif
+
 class Insist : public Pattern {
     public:
         Insist(const char *str) : Pattern(str) {}   
@@ -627,6 +655,12 @@ class Insist : public Pattern {
 
             // make invert sensation and make into a fraction of the stroke distance
             _strokeFraction = (100 - abs(sensation))/100.0f;
+
+            // Never let the fraction reach zero: _acceleration divides by it,
+            // and a zero fraction also makes the in and out targets identical.
+            if (_strokeFraction < INSIST_MIN_STROKE_FRACTION) {
+                _strokeFraction = INSIST_MIN_STROKE_FRACTION;
+            }
 
             _strokeInFront = (sensation > 0) ? true : false;
 
