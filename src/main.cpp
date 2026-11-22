@@ -295,6 +295,23 @@ static void startHoming()
 // Command applier: called for every update that does not come from the engine
 // ---------------------------------------------------------------------------
 
+// The engine keeps its own pattern index and refuses one that is out of range, so
+// the state has to be pulled back to what the machine really uses. Without this a
+// request with pattern 9 leaves the state claiming 9 ("Invalid") while the engine
+// still runs the old pattern, and the UI then shows a pattern the machine is not
+// running. Same class as the depth/stroke mismatch this project already fixed.
+static void reflectPatternFromEngine()
+{
+    int enginePattern = Stroker.getPattern();
+    strokeStateService.update([&](StrokeState &state)
+                              {
+        if (state.pattern == enginePattern) {
+            return StateUpdateResult::UNCHANGED;
+        }
+        state.pattern = enginePattern;
+        return StateUpdateResult::CHANGED; }, STROKE_ENGINE_ORIGIN);
+}
+
 static void applyStrokeStateToEngine(const String &originId)
 {
     if (originId == STROKE_ENGINE_ORIGIN)
@@ -361,6 +378,7 @@ static void applyStrokeStateToEngine(const String &originId)
         Stroker.setStroke(command.stroke, false);
         Stroker.setSensation(command.sensation, false);
         Stroker.setPattern(command.pattern, false);
+        reflectPatternFromEngine();
         return;
     }
 
@@ -388,6 +406,7 @@ static void applyStrokeStateToEngine(const String &originId)
     Stroker.setStroke(command.stroke, false);
     Stroker.setSensation(command.sensation, false);
     Stroker.setPattern(command.pattern, false);
+    reflectPatternFromEngine();
 
     if (command.run)
     {
