@@ -318,21 +318,18 @@ flash and the pattern table are verified; the carriage has not moved.
 9. **The pattern port is motion-verified (192.168.2.115, supervised, 20 mm/s,
    depth 60 / stroke 40 except where noted).** Simple Stroke sweeps 20.1↔59.4 mm at
    20.3 mm/s with reversals at both ends, full stroke ≈ 6 s as the engine derives.
-   RandomDepth inserts to a different depth every stroke and always returns the full
-   stroke. Knot completes its three phases — out to 20, fast to 40 (50 %), creep to
-   ~56 (92 %), back to 20 — but its creep is 2 % of the commanded speed, so at
-   20 mm/s that phase alone takes ~40 s; at 100 mm/s it is 2 mm/s and the cycle
-   takes ~10 s. That is Knot's design and predates the port, not a regression.
-   Insist at sensation +100 sits at 58–60 mm vibrating over a ~2 mm amplitude and
-   never freezes. Stop'n'Go pauses 5.01/4.80/4.88 s for a nominal 5050 ms.
+   Random Depth inserts to a different depth every stroke and always returns the full
+   stroke. Insist at sensation +100 sits at 58–60 mm vibrating over a ~2 mm amplitude
+   and never freezes. Stop'n'Go pauses 5.01/4.80/4.88 s for a nominal 5050 ms.
    Not yet done on hardware: the Stop'n'Go **boot** case, which needs a run within
    ~10 s of power-up because that is the window the old absolute-uptime gate closed.
    The host harness proves that one case at every uptime.
 10. **The six fray-d patterns and the re-derived Knot are motion-verified** (same
-   supervised setup, 20 mm/s, depth 60 / stroke 40). Knot: the full cycle now
-   completes in ~12 s and reaches the stop-short target 56.8 mm. Knot Stroke: 20 →
-   40 (the sensation point) → 60 in one cycle. Half'n'Out: in to 60 every time, out
-   to 40 then 20 on alternate cycles. Slap: out to 20, a ~5 s pause, then 90 % and
-   100 %. Random Stroke: targets vary every stroke. Point: parks at exactly 40.0 mm
+   supervised setup, 20 mm/s, depth 60 / stroke 40). Knot Short: the full cycle now
+   completes in ~12 s, twice the commanded stroke time, and reaches the stop-short
+   target 56.8 mm; the creep runs at ~3.3 mm/s, up from 0.4. Knot Deep: 20 → 40 (the
+   sensation point) → 60 in one cycle. Half'n'Out: in to 60 every time, out to 40
+   then 20 on alternate cycles. Slap: out to 20, a ~5.6 s pause, then 90 % and
+   100 %. Random Target: targets vary every stroke. Point: parks at exactly 40.0 mm
    (the middle) and holds. Progressive walks the sweep in segments. Nothing hit the
    position limit and no fault was raised.
