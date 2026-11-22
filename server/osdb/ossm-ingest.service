@@ -1,0 +1,32 @@
+[Unit]
+Description=osdb - OSSM session and torque archive (ingest API + dashboard)
+Documentation=https://github.com/ortlof/OSSM-Stroke-SvelteKit
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=osdb
+Group=osdb
+WorkingDirectory=/opt/osdb
+# Secrets live in files, never on the command line, so they cannot be read out of
+# `ps` or the journal. /etc/osdb/env holds the DSN with the database password;
+# the other two are read by the app itself.
+EnvironmentFile=/etc/osdb/env
+Environment=OSSM_INGEST_KEY_FILE=/etc/osdb/ingest.key
+Environment=OSSM_DASH_PASS_FILE=/etc/osdb/dashboard.pass
+Environment=OSSM_DASH_USER=osdb
+Environment=OSSM_PORT=8080
+ExecStart=/usr/bin/gunicorn --bind 0.0.0.0:8080 --workers 2 --timeout 30 \
+          --access-logfile - --error-logfile - app:app
+Restart=on-failure
+RestartSec=3
+# The ingest path is small and bounded; keep the service from taking the guest
+# down with it if a request misbehaves.
+MemoryMax=512M
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

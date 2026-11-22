@@ -469,3 +469,45 @@ flash and the pattern table are verified; the carriage has not moved.
    100 %. Random Target: targets vary every stroke. Point: parks at exactly 40.0 mm
    (the middle) and holds. Progressive walks the sweep in segments. Nothing hit the
    position limit and no fault was raised.
+
+## Session telemetry endpoint (osdb) — live, 2026-11-22
+
+The machine cannot reach this network, so recorded sessions go **out** to a small
+service over the internet rather than being pulled from it. That service is **LXC 117
+`osdb` on `prox`**, built and verified on 2026-11-22.
+
+- **Placement:** unprivileged Debian 12 container, 2 cores, 2 GB RAM, 12 GB rootfs on
+  `local`, `10.99.10.60/24` on **vmbr1**, gateway 10.99.10.1. Nothing about vmbr1,
+  vmbr0, routing or Tailscale was touched: `prox` advertises 10.99.10.0/24 into the
+  tailnet, and adding a route there is what broke LAN-facing services before.
+- **Measured cost to the neighbours:** **1.4 GB** of the shared `local` pool (60.2 →
+  58.8 GB free), **137 MB** RSS of 2048 MB allocated, host free RAM 15.1 → 14.6 GB.
+  The 12 GB rootfs is a sparse image, so the pool pays for what is written, not for
+  the reservation. That is the number to quote, not the reservation.
+- **Why it must be published:** the machine is 192.168.2.x and the container is
+  10.99.10.x, with no route between them. Ingest therefore leaves over HTTPS through
+  the central proxy as `osdb.d4rkn3t.de` → `http://10.99.10.60:8080`. TLS terminates
+  at the proxy, so the container speaks plain HTTP internally.
+- **Surfaces:** `/ingest/session/start`, `/ingest/samples`, `/ingest/session/stop`
+  (key-authenticated via `X-OSSM-Key`), `/ingest/health` (open, for monitoring), and
+  the dashboard at `/` behind basic auth **plus an IP allowlist** of 10.99.10.0/24,
+  127.0.0.0/8 and 100.64.0.0/10 — so a leaked dashboard password is not enough from
+  the internet.
+- **The device has no clock** (FT_NTP is off), so it sends uptime and the **server**
+  stamps wall time on arrival. PostgreSQL 15 holds `sessions` + `samples` with a
+  `session_summary` view. **Retention is 30 days**, enforced by a daily systemd timer
+  rather than a trigger, because deleting inside the ingest path would stall the
+  device.
+- **Only a deliberate record press writes anything** — the "real play, not test
+  data" rule held by the design instead of by discipline. The install-check row was
+  purged; the tables are at 0 sessions, 0 samples.
+- **Verified end-to-end before being called done:** no key → 401, wrong key → 401,
+  session opened, 120 samples accepted, closed, summary correct (peak +23.69 /
+  −23.70 %, peak 90.1 N), dashboard 401 unauthenticated and 200 with auth showing
+  the row.
+- **Sources:** `server/osdb/` — `app.py`, `schema.sql`, `setup.sh` (idempotent) and
+  `ossm-ingest.service`. Secrets are generated once into `/etc/osdb/` (0640
+  root:osdb): `ingest.key`, `dashboard.pass`, `db.pass`, and `env` holding the DSN.
+- **Open:** the proxy vhost and the DNS record are Basti's to add; the firmware HTTP
+  client, the record start/stop control in the browser and Windows clients, and the
+  live stream are not written yet.
