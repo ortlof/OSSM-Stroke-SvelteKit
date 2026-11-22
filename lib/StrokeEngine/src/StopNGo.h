@@ -46,6 +46,18 @@ public:
             _index = index;
             return _nextMove;
         }
+
+        // A delay armed on an earlier call starts NOW. StrokeEngine only asks for
+        // the next target once the driver has stopped, so this is the first moment
+        // that the move before it has really finished. Arming the timer when the
+        // move is issued instead made the pause (delay - move time): measured on
+        // the machine at 20 mm/s, a nominal 5050 ms pause lasted 1.90-1.96 s, and
+        // at a slow enough speed or a long enough stroke it disappears entirely.
+        if (_delayArmed) {
+            _delayArmed = false;
+            _startDelay();
+        }
+
         // maximum speed of the trapezoidal motion
         _nextMove.speed = 1.5 * _stroke / _timeOfStroke;
 
@@ -88,8 +100,9 @@ public:
                         _strokeSeriesIndex--;
                     }
 
-                    // start delay after having moved out
-                    _startDelay();
+                    // start delay after having moved out. Armed, not started: the
+                    // timer begins on the next call, when this move has finished.
+                    _delayArmed = true;
                 }
 
                 // even stroke is moving in
@@ -117,6 +130,7 @@ protected:
     int _strokeSeriesIndex = 1;
     int _strokeIndex = 0;
     bool _countStrokesUp = true;
+    bool _delayArmed = false;
 };
 
 #endif // STOPNGO_H
