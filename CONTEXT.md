@@ -106,10 +106,10 @@ one class per file, patterns emit a position in **0..stroke, in mm**, only —
 motion. Its `PatternMath.h` is the same logic, only reformatted, so the two trees
 compute the same numbers.
 
-How it was reviewed: a host harness (`/root/.hermes/cache/scratch/patterncheck/`)
-compiles the **real** `pattern.h` against small Arduino stubs and prints what every
-pattern commands for a range of indices and sensations. Reasoning about the code
-found less than running it did.
+How it was reviewed: the host harness in the `ossm-stroke-firmware` skill,
+`scripts/pattern-review/` — it compiles the **real** `pattern.h` against small
+Arduino stubs and prints what every pattern commands for a range of indices and
+sensations. Reasoning about the code found less than running it did.
 
 | Pattern | Error | State |
 | --- | --- | --- |
