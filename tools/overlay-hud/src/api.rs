@@ -72,6 +72,16 @@ pub struct StrokeState {
     /// True when the running pattern reads `slow_start`; hides the slider when
     /// false instead of offering a control that does nothing.
     pub uses_slow_start: bool,
+    /// The operator's record control. While it is set the firmware archives the
+    /// session on the server; clearing it closes the recording.
+    pub record: bool,
+    /// Archive status: off / idle / clock / opening / recording / error.
+    pub upload_state: String,
+    pub upload_session: i32,
+    pub upload_queued: i32,
+    pub upload_sent: i32,
+    pub upload_dropped: i32,
+    pub upload_error: String,
 }
 
 /// `/rest/strokeSettings`: the motion scale and the slider limits.

@@ -508,6 +508,32 @@ service over the internet rather than being pulled from it. That service is **LX
 - **Sources:** `server/osdb/` — `app.py`, `schema.sql`, `setup.sh` (idempotent) and
   `ossm-ingest.service`. Secrets are generated once into `/etc/osdb/` (0640
   root:osdb): `ingest.key`, `dashboard.pass`, `db.pass`, and `env` holding the DSN.
-- **Open:** the proxy vhost and the DNS record are Basti's to add; the firmware HTTP
-  client, the record start/stop control in the browser and Windows clients, and the
-  live stream are not written yet.
+- **The machine side is live too.** `src/SessionUploadService.*` pushes instead of
+  waiting to be polled, because the archive cannot reach the machine. The operator's
+  **Record** control rides on `strokeState` (`record` plus `upload_state`,
+  `upload_session`, `upload_queued`, `upload_sent`, `upload_dropped`, `upload_error`),
+  so both clients drive it: the browser page and the Windows overlay. A session opens
+  on the record press and closes on the next one; **samples are taken only while the
+  engine runs**, so a pause stays one recording instead of a flat line, and a test run
+  nobody pressed Record for writes nothing. Settings live in
+  `/config/sessionUpload.json`; the archive is **off by default**.
+- **Verified on the device:** it opened session 1 over its own TLS connection
+  (`1 | ossm-stroke | Simple Stroke` in `session_summary`), with the machine
+  stationary, and did not reset. The samples themselves still need a supervised run -
+  `capture()` refuses to sample unless the engine runs, by design.
+- **TLS on this board cost the day, and the traps are worth keeping** (they are in the
+  `ossm-stroke-firmware` skill): the CA string must keep its PEM delimiters or mbedTLS
+  says `CRT/CRL/CSR format is invalid`; **both Let's Encrypt roots must be pinned**
+  (X1 alone verifies in OpenSSL and fails on the device, because X2 is the anchor that
+  signs the presented chain); `max_alloc_heap` - not `free_heap` - decides whether the
+  handshake fits (29,684 bytes was not enough, 43 kB is); the 5 s **idle-task watchdog
+  resets the device mid-handshake** on core 0, so the request runs inside
+  `disableCore0WDT()` with a retry backoff; and the uploader task needs a 16 kB stack.
+  Flash went 82.4 % -> 91.8 % (1,804,496 bytes, 158 kB free) and `FT_NTP` is 1 again -
+  for a clock TLS can validate against, not for MQTT.
+- **`FSPersistence` persists through the reader it is given**, so a reader that hides
+  the key (so a GET cannot leak it) also kept it out of the file and the machine forgot
+  it on every reboot. Two readers, one updater: `readForFile()` for the file,
+  `read()` for HTTP.
+- **Open:** the Windows overlay binary in `dist/` predates the Record button until it is
+  rebuilt; and a supervised motion run is still needed to see samples arrive.

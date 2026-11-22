@@ -5,8 +5,9 @@
  *   Live stroke control and telemetry for the OSSM on ESP32-SvelteKit.
  *
  *   This service carries two kinds of data and keeps them apart on purpose:
- *     - commands: run, speed, depth, stroke, sensation, pattern
- *     - telemetry: servo_state, pattern_name, homed, position, physical_travel, clipping
+ *     - commands: run, speed, depth, stroke, sensation, pattern, record
+ *     - telemetry: servo_state, pattern_name, homed, position, physical_travel,
+ *       clipping, upload_state
  *
  *   Telemetry is written by the engine synchronisation loop only. That loop uses
  *   the origin "strokeEngine", and the command applier ignores updates with that
@@ -53,6 +54,12 @@ public:
     // like home. It also leaves the pattern, because it is the "get it out"
     // control and leaving run set would let the next command restart the sweep.
     bool pullOut = false;
+    // Arm the session archive. This is the operator's record button: while it is
+    // set the firmware opens a session on the server, streams samples while the
+    // machine runs, and closes the session when it is cleared. Off by default,
+    // so nothing is recorded that nobody asked to record - that is the "real
+    // play, not test data" rule, held by the design rather than by discipline.
+    bool record = false;
 
     // --- telemetry ---
     String servoState = "disabled";  // UNDEFINED / READY / PATTERN / SETUPDEPTH / STREAMING / STOPPING
@@ -65,6 +72,20 @@ public:
     // True when the running pattern reads slow_start. The clients hide the slider
     // when it is false, instead of offering a control that does nothing.
     bool usesSlowStart = false;
+
+    // --- archive status, written by SessionUploadService ---
+    // "off"      disabled in the settings, nothing will be sent
+    // "idle"     enabled and connected-ready, no session open
+    // "clock"    waiting for NTP, because TLS cannot validate a certificate in 1970
+    // "opening"  session open request in flight
+    // "recording" session open, samples are being captured and sent
+    // "error"    the last request failed, see upload_error
+    String uploadState = "off";
+    int uploadSession = 0;     // server session id, 0 when none
+    int uploadQueued = 0;      // samples waiting in the buffer
+    int uploadSent = 0;        // samples accepted by the server this session
+    int uploadDropped = 0;     // samples dropped because the buffer was full
+    String uploadError = "";   // last error, empty when the last request worked
 
 
     // usable_travel and sweep_start are derived, so they are not stored: a stored
@@ -84,6 +105,7 @@ public:
         root["pattern"] = state.pattern;
         root["slow_start"] = state.slowStart;
         root["pull_out"] = state.pullOut;
+        root["record"] = state.record;
 
         root["servo_state"] = state.servoState;
         root["pattern_name"] = state.patternName;
@@ -97,6 +119,13 @@ public:
         root["sweep_start"] = (sweep > 0.0f) ? sweep : 0.0f;
         root["clipping"] = state.clipping;
         root["uses_slow_start"] = state.usesSlowStart;
+
+        root["upload_state"] = state.uploadState;
+        root["upload_session"] = state.uploadSession;
+        root["upload_queued"] = state.uploadQueued;
+        root["upload_sent"] = state.uploadSent;
+        root["upload_dropped"] = state.uploadDropped;
+        root["upload_error"] = state.uploadError;
     }
 
     static StateUpdateResult update(JsonObject &root, StrokeState &state, const String &originId)
@@ -116,6 +145,7 @@ public:
         bool run = root["run"] | state.run;
         bool home = root["home"] | state.home;
         bool pullOut = root["pull_out"] | state.pullOut;
+        bool record = root["record"] | state.record;
         bool keepStrokeStart = root["keep_stroke_start"] | state.keepStrokeStart;
         int setup = root["setup"] | state.setup;
         float speed = root["speed"] | state.speed;
@@ -160,6 +190,7 @@ public:
         stroke = constrain(stroke, 0.0f, maxStroke);
 
         if (run == state.run && home == state.home && pullOut == state.pullOut &&
+            record == state.record &&
             keepStrokeStart == state.keepStrokeStart &&
             setup == state.setup &&
             speed == state.speed && depth == state.depth &&
@@ -172,6 +203,7 @@ public:
         state.run = run;
         state.home = home;
         state.pullOut = pullOut;
+        state.record = record;
         state.keepStrokeStart = keepStrokeStart;
         state.setup = setup;
         state.speed = speed;

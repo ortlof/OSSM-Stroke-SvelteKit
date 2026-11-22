@@ -8,6 +8,7 @@
 	import Engine from '~icons/tabler/engine';
 	import Play from '~icons/tabler/player-play';
 	import Stop from '~icons/tabler/player-stop';
+	import Record from '~icons/tabler/player-record';
 	import Home from '~icons/tabler/home';
 	import Reload from '~icons/tabler/reload';
 
@@ -31,6 +32,13 @@
 		sweep_start: number;
 		clipping: boolean;
 		uses_slow_start: boolean;
+		record: boolean;
+		upload_state: string;
+		upload_session: number;
+		upload_queued: number;
+		upload_sent: number;
+		upload_dropped: number;
+		upload_error: string;
 	}
 
 	interface StrokeTuning {
@@ -64,7 +72,14 @@
 		usable_travel: 420,
 		sweep_start: 0,
 		clipping: false,
-		uses_slow_start: false
+		uses_slow_start: false,
+		record: false,
+		upload_state: '',
+		upload_session: 0,
+		upload_queued: 0,
+		upload_sent: 0,
+		upload_dropped: 0,
+		upload_error: ''
 	});
 
 	let patterns: string[] = $state([]);
@@ -243,10 +258,44 @@
 			>
 				Pull out
 			</button>
+			<button
+				class="btn inline-flex items-center"
+				class:btn-error={state.record}
+				disabled={!state.upload_state || state.upload_state === 'off'}
+				title={!state.upload_state || state.upload_state === 'off'
+					? 'The archive is switched off in the firmware settings (/rest/sessionUpload)'
+					: state.record
+						? 'Recording to the archive. Press to stop and close the session.'
+						: 'Record this session to the archive. Nothing is written until this is pressed, and samples are taken only while the machine runs.'}
+				onclick={() => command({ record: !state.record })}
+			>
+				<Record class="mr-2 h-5 w-5" /><span>{state.record ? 'Recording' : 'Record'}</span>
+			</button>
 			<button class="btn inline-flex items-center" onclick={loadState}>
 				<Reload class="mr-2 h-5 w-5" /><span>Reload</span>
 			</button>
 		</div>
+
+		{#if state.upload_state && state.upload_state !== 'off'}
+			<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+				<span class="badge {state.record ? 'badge-error' : 'badge-ghost'}">
+					{state.record ? 'recording' : state.upload_state}
+				</span>
+				{#if state.upload_session}
+					<span class="opacity-70">session {state.upload_session}</span>
+					<span class="opacity-70">sent {state.upload_sent}</span>
+				{/if}
+				{#if state.upload_queued}
+					<span class="opacity-70">queued {state.upload_queued}</span>
+				{/if}
+				{#if state.upload_dropped}
+					<span class="text-warning">dropped {state.upload_dropped}</span>
+				{/if}
+				{#if state.upload_error}
+					<span class="text-warning">{state.upload_error}</span>
+				{/if}
+			</div>
+		{/if}
 
 		{#if state.setup !== 0}
 			<div class="alert alert-warning my-2 shadow-lg">

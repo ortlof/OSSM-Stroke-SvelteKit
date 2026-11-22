@@ -23,6 +23,7 @@
 #include "OSSM_Config.h"
 #include "OSSM_PinDEF.h"
 #include "ModbusProbeService.h"
+#include "SessionUploadService.h"
 #include "StrokeSettingsService.h"
 #include "StrokeStateService.h"
 
@@ -31,7 +32,7 @@
 // The framework needs to know how many HTTP endpoints exist in total, because
 // the ESP-IDF server allocates them statically. Count every server.on() in the
 // framework, in the front end data and in this project, then add a few spare.
-#define NUMBER_OF_ENDPOINTS 60
+#define NUMBER_OF_ENDPOINTS 64
 
 PsychicHttpServer server;
 ESP32SvelteKit esp32sveltekit(&server, NUMBER_OF_ENDPOINTS);
@@ -39,6 +40,11 @@ ESP32SvelteKit esp32sveltekit(&server, NUMBER_OF_ENDPOINTS);
 StrokeSettingsService strokeSettingsService(&server, &esp32sveltekit);
 StrokeStateService strokeStateService(&server, &esp32sveltekit);
 ModbusProbeService modbusProbeService(&server, &esp32sveltekit);
+// The archive uploader only reads the other services: the stroke state for the
+// record control, the machine settings for the torque limits it records at the
+// start of a session, and the Modbus probe for the signed torque reading.
+SessionUploadService sessionUploadService(&server, &esp32sveltekit, &strokeStateService,
+                                          &strokeSettingsService, &modbusProbeService);
 
 // ---------------------------------------------------------------------------
 // Motion
@@ -699,6 +705,7 @@ void setup()
     strokeSettingsService.begin();
     strokeStateService.begin();
     modbusProbeService.begin();
+    sessionUploadService.begin();
 
     // --- board ---
     pinMode(SERVO_ALM_PIN, INPUT);

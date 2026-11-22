@@ -101,6 +101,17 @@ fn glyph_c() -> Color32 {
     Color32::from_rgba_unmultiplied(32, 34, 40, 235)
 }
 
+// The record button. Amber means "this moves the machine" in this panel, and
+// arming the archive moves nothing, so it must not use that family: armed is a
+// muted crimson, disarmed the same quiet neutral as the other idle buttons.
+fn record_on_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(158, 62, 72, 190)
+}
+
+fn record_off_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(64, 67, 76, 90)
+}
+
 const OK: Color32 = Color32::from_rgb(120, 220, 140);
 const WARN: Color32 = Color32::from_rgb(240, 200, 90);
 const ERR: Color32 = Color32::from_rgb(240, 110, 110);
@@ -528,6 +539,15 @@ impl OverlayApp {
                                 self.setup_button(ui);
                             });
                         }
+                        3 => {
+                            // Below Sensation: the archive control. The two faders
+                            // on the right stay clear of buttons so they line up
+                            // with the rest.
+                            ui.horizontal(|ui| {
+                                ui.add_space(pad);
+                                self.record_button(ui);
+                            });
+                        }
                         _ => {
                             ui.add_space(btn);
                         }
@@ -764,6 +784,74 @@ impl OverlayApp {
             } else {
                 "Pull out: stops the pattern and retracts all the way to the home \
                  end at 40 mm/s. This moves the machine."
+            };
+            resp.on_hover_text(hint);
+        }
+    }
+
+    /// The record button: arms and disarms the session archive.
+    ///
+    /// It moves nothing, so it is deliberately not in the amber family the motion
+    /// controls use - a control that archives data must never look like one that
+    /// drives the carriage. The dot is hollow while armed and open, solid while a
+    /// session is actually being written.
+    fn record_button(&mut self, ui: &mut egui::Ui) {
+        let state = self.snapshot.state.clone();
+        let available = !state.upload_state.is_empty() && state.upload_state != "off";
+        let armed = state.record;
+
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(SETUP_SIZE, SETUP_SIZE), Sense::click());
+
+        let fill = if !available {
+            disabled_fill()
+        } else if armed {
+            record_on_fill()
+        } else {
+            record_off_fill()
+        };
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(9), fill);
+        if resp.hovered() && available {
+            painter.rect_filled(rect, CornerRadius::same(9), Color32::from_white_alpha(22));
+        }
+
+        let c = rect.center();
+        let r = SETUP_SIZE * 0.17;
+        let ink = glyph_c();
+        if armed {
+            painter.circle_filled(c, r, ink);
+        } else {
+            painter.circle_stroke(c, r, egui::Stroke::new(2.2, ink));
+        }
+
+        if resp.clicked() && available {
+            self.send_state(serde_json::json!({ "record": !armed }));
+        }
+        if resp.hovered() {
+            let hint = if !available {
+                "record: the archive is switched off in the firmware settings".to_string()
+            } else if armed {
+                format!(
+                    "Recording. Session {}, {} sample(s) sent, {} waiting{}. Press to stop and close it.",
+                    state.upload_session,
+                    state.upload_sent,
+                    state.upload_queued,
+                    if state.upload_dropped > 0 {
+                        format!(", {} dropped", state.upload_dropped)
+                    } else {
+                        String::new()
+                    }
+                )
+            } else if state.upload_state == "clock" {
+                "record: waiting for the clock - HTTPS cannot check a certificate without NTP"
+                    .to_string()
+            } else if !state.upload_error.is_empty() {
+                format!("record: last error was \"{}\"", state.upload_error)
+            } else {
+                "Record this session to the archive. Nothing is written until this is \
+                 pressed, and samples are taken only while the machine runs."
+                    .to_string()
             };
             resp.on_hover_text(hint);
         }
