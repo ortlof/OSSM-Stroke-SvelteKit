@@ -31,6 +31,16 @@ rather than re-deriving.
   At-rest reading is stable (mean −13.65 %, stdev 0.34 % over 12 s), so 1 kg along the
   axis (2.58 %) is measurable. A reading taken seconds after a homing run is not
   settled yet — one boot showed −5.3 % then −13.4 %.
+- **A mass reads correctly to ~1 %, but ONLY away from an end stop** (measured
+  2026-11-22 with a stated 3.093 kg on the carriage). Held at 60 mm, where the motor
+  carries everything, the torque delta against the no-load baseline read **−3.131 kg,
+  a 1.2 % error**. Held at position 0 the same mass read **2.33 kg**, and 2.0 kg after
+  moving away and back — the end stop carries part of the weight, and how much depends
+  on how the carriage arrived there. So a holding-torque reading at 0 is not a mass
+  measurement. `force_kg` from the drive is the total (carriage + load + friction), not
+  the added mass: it read −7.62 kg at rest with the 3.09 kg on. Readings:
+  no load at 0 mm −13.65 %; load at 0 mm −19.65 %; **load at 60 mm −21.73 %**
+  (stdev 0.71); load back at 0 mm −16.50 %.
 - **Torque limit registers**: `0x01FE` = P05-10 forward, `0x01FF` = P05-11 reverse,
   scale 0.1 %. **The drive stores forward positive and reverse NEGATIVE** (vendor
   table: P05-11 range `-300.0-0`, default −200.0; the drive reads +2000 / −2000).
@@ -349,9 +359,10 @@ flash and the pattern table are verified; the carriage has not moved.
 7. **Which register is "outward" is not yet proven.** `torque_outward_forward`
    defaults to true; confirm it with a slow jog at the machine and flip the switch in
    Machine Setup if the carriage pushes when it should pull.
-8. **The 1 kg check has not been run yet.** The arithmetic and the at-rest noise floor
-   are recorded above; the mass has to go on a vertical axis (or on a pulley) to load
-   the axis at all.
+8. **The mass check is done and it works** (see the force bullet above): 3.093 kg read as
+   −3.131 kg, 1.2 % error, measured at 60 mm away from the end stop. At position 0 it
+   reads short, because the stop carries part of the weight. Use it as a load monitor
+   rather than a scale, and take the reading mid-travel, never parked.
 9. **The pattern port is motion-verified (192.168.2.115, supervised, 20 mm/s,
    depth 60 / stroke 40 except where noted).** Simple Stroke sweeps 20.1↔59.4 mm at
    20.3 mm/s with reversals at both ends, full stroke ≈ 6 s as the engine derives.
@@ -361,15 +372,14 @@ flash and the pattern table are verified; the carriage has not moved.
    Not yet done on hardware: the Stop'n'Go **boot** case, which needs a run within
    ~10 s of power-up because that is the window the old absolute-uptime gate closed.
    The host harness proves that one case at every uptime.
-10. **The slow-start slider and the pull-out button are NOT motion-verified.** What is
-   verified: the firmware builds and runs, `slow_start` round-trips over REST, the two
-   knot patterns' slow point moves with it on the host harness, `uses_slow_start` is
-   true for exactly patterns 7 and 11, the browser UI and the overlay both draw the new
-   controls, and the overlay's label switches between `SLOW START` and `SLOW (KNOT)` with
-   the pattern. **The pull-out command has never been fired, because it moves the
-   carriage and Basti was not at the machine.** Firing it needs one supervised press:
-   expect the pattern to stop, `run` to go false, and the carriage to travel to position
-   0 at 40 mm/s and hold.
+10. **The slow-start slider and the pull-out button are motion-verified** (2026-11-22,
+   supervised, 3.093 kg on the carriage, 20 mm/s, depth 60 / stroke 40). Knot Short's
+   fast phase ended at **28.1 mm** with `slow_start` 20 % and at **52.0 mm** with 80 % —
+   the two values a share of the 40 mm stroke puts them at — with the creep filling the
+   rest and both stopping at the 56.8 mm stop-short target. The **pull-out fired
+   mid-pattern**: the carriage went 51.8 → 0.0 mm in about 1.6 s (≈37 mm/s against the
+   40 mm/s command), the pattern stopped, and `run` went false. On its own it took
+   59.8 → 0.0 mm in ~1.6 s. The machine moved the 3.09 kg load without complaint.
 11. **The six fray-d patterns and the re-derived Knot are motion-verified** (same
    supervised setup, 20 mm/s, depth 60 / stroke 40). Knot Short: the full cycle now
    completes in ~12 s, twice the commanded stroke time, and reaches the stop-short
