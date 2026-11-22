@@ -95,39 +95,54 @@ rather than re-deriving.
 - In Rust, uppercase locals are **const patterns**: `let GAP = x;` fails with
   "refutable pattern in local binding". Bind lowercase.
 
-## Pattern library — reviewed, with the upstream to compare against
+## Pattern library — ported from LUST-motion
 
-`lib/StrokeEngine/src/pattern.h` is one 1120-line file. Patterns work in
-**absolute steps** and each one holds `_depth`, `_stroke` and its own speed and
-acceleration maths. Upstream `openlust/LUST-motion` has a refactored `lib/Pattern/`:
-one class per file, patterns emit a position in **0..stroke, in mm**, only —
-`nextTarget(index, retract)`, `_infinite = 1e30` to ask for machine maximum, and a
-`StrokeEngineSafeGuard` that turns the relative request into an absolute, clipped
-motion. Its `PatternMath.h` is the same logic, only reformatted, so the two trees
-compute the same numbers.
+`lib/StrokeEngine/src/` now holds the pattern layer that the LUST-motion refactor
+uses: `Pattern.h` (base) plus **one file per pattern** — `SimpleStroke.h`,
+`TeasingPounding.h`, `RoboStroke.h`, `HalfnHalf.h`, `Deeper.h`, `StopNGo.h`,
+`Insist.h`, `Knot.h`, `RandomDepth.h` — and `PatternLib.h` as the table.
+`PatternMath.h` is shared. The old single-file `pattern.h` is gone.
 
-How it was reviewed: the host harness in the `ossm-stroke-firmware` skill,
-`scripts/pattern-review/` — it compiles the **real** `pattern.h` against small
-Arduino stubs and prints what every pattern commands for a range of indices and
-sensations. Reasoning about the code found less than running it did.
+**The contract, and it is the point:** a pattern is handed the stroke LENGTH in mm
+and the full-stroke TIME in seconds, and answers with a position in **0..stroke, in
+millimetres**, relative to the near end of the sweep, plus mm/s and mm/s².
+`StrokeEngine::_toMotionParameter()` is the single bridge — it adds
+`(_depth - _stroke)`, converts to steps and clamps — and `_applyMotionProfile()`
+keeps the final word on the machine envelope. Before the port every pattern carried
+`_depth` and handed back an absolute step position, so each one re-derived the
+machine envelope and each one could get it wrong alone.
 
-| Pattern | Error | State |
-| --- | --- | --- |
-| Insist | the stroke fraction `(100-|s|)/100` is exactly 0 at the ±100 the engine clamps to, and `_acceleration` divides by it. Measured **−25,300,232 mm/s² and zero travel**, so the engine clipped the acceleration to 1 step/s² and the machine stopped | **fixed** (floor 0.05) |
-| Stop'n'Go | `_isStillDelayed()` compared against `_startDelayMillis + delay`, i.e. against **absolute uptime** before the first `_startDelay()`, so the pattern sat out its first pause after every boot — up to 10 s at sensation +100. `_startDelayMillis` was an `int` holding a `millis()` value | **fixed** |
-| Deeper | printed on **every stroke** through `DEBUG_PATTERN`, which was the last debug switch still on: `String` building means malloc and float formatting on the motion task, 6 kB stack | **fixed** (off) |
-| Deeper | `slope = _stroke / _countStrokesForRamp` is integer division, so a stroke shorter than the ramp count gives slope 0 and a silent no-move | open, low risk |
-| Teasing/Pounding | at sensation +100 it asks 1000 mm/s and 33334 mm/s², above the machine's 660 and 10000; the engine clips, so the stroke then takes longer than the commanded time | by design |
-| JackHammer, StrokeNibbler | store the FULL stroke time but divide by it as if it were the half-stroke time (all speeds half of intended); `index != _index` is unsigned against int | dead code, not in the table |
+`setSpeedLimit()` and `setDepth()` are gone from the pattern API. `getNumberOfPattern()`
+moved out of the header, so the pattern table exists in one translation unit
+instead of one per includer. `SimpleStroke` and `Knot` were **not** upstream; both
+are ported so nothing is lost, and Knot's absolute targets are unchanged
+(240 / 270 / 295.2 mm). `RandomDepth` is the new pattern from upstream.
+`JackHammer` and `StrokeNibbler` were dropped: not in the table, and both divide by
+the full-stroke time as if it were the half-stroke time, so every speed they
+commanded was half of what was intended.
 
-**Insist and the Stop'n'Go timer are still broken upstream** — checked on `main`
-and on every branch of LUST-motion. Report them; do not assume a fix is coming.
-LUST-motion also has no `SimpleStroke` and no `Knot`.
+Four bugs were found by reviewing the patterns on the host, and **all four are
+still present in LUST-motion `main` and on every branch** — do not assume a fix is
+coming from there:
 
-Porting the LUST-motion architecture is the better build, but it is an **engine**
-change and not a pattern change: our engine owns the depth offset and the clipping
-in `_applyMotionProfile()`, theirs moves both into `SafeGuard`. Not done — there is
-no hardware on this box to re-verify motion against.
+| Pattern | Error |
+| --- | --- |
+| Insist | the stroke fraction `(100 − abs(s))/100` is exactly 0 at the ±100 the engine clamps to, and `_acceleration` divides by it. Measured **−25,300,232 mm/s² and zero travel**, so the engine clipped the acceleration to 1 step/s² and the machine simply stopped. Floored at 0.05 |
+| Stop'n'Go | `_isStillDelayed()` compared against `_startDelayMillis + delay`, i.e. against **absolute uptime** before the first `_startDelay()`, so the pattern sat out its first pause after every boot — up to 10 s at sensation +100. `_startDelayMillis` was an `int` holding a `millis()` value |
+| Deeper | printed on **every stroke** through `DEBUG_PATTERN`, which was the last debug switch still on. `String` building means malloc and float formatting on the motion task, 6 kB stack |
+| TeasingPounding | one `ESP_LOGV` per stroke on the motion path, removed with the rest of the debug IO |
+
+Teasing/Pounding and Half'n'Half at sensation +100 still ask above the machine's
+660 mm/s and 10000 mm/s²; the engine clips, so such a stroke takes longer than the
+commanded time. By design, not a fault.
+
+Review and regression harness: `scripts/pattern-review/` in the `ossm-stroke-firmware`
+skill. It compiles the real pattern headers against Arduino stubs, mirrors
+`_toMotionParameter()`, and prints every pattern's move for a range of indices and
+sensations. Reasoning about the code found far less than running it did.
+
+**Motion has not been re-verified on the machine since the port.** The build, the
+flash and the pattern table are verified; the carriage has not moved.
 
 ## Overlay HUD, current state
 
@@ -187,3 +202,12 @@ no hardware on this box to re-verify motion against.
 8. **The 1 kg check has not been run yet.** The arithmetic and the at-rest noise floor
    are recorded above; the mass has to go on a vertical axis (or on a pulley) to load
    the axis at all.
+9. **The pattern port has not been motion-verified.** Build, flash and the pattern
+   table are confirmed on 192.168.2.115; nothing has moved. The plan when Basti is at
+   the machine: 20 mm/s, 40 mm stroke, 60 mm depth, one pattern at a time, stop in a
+   `finally` and a hard position limit. Order — Simple Stroke as the baseline, then
+   Knot and RandomDepth (hand-ported and new), then Insist at sensation +100 (the
+   divide-by-zero that used to freeze it), then Stop'n'Go (the pause must still fire).
+   The Stop'n'Go **boot** case cannot be reproduced by hand: it needs a run within
+   ~10 s of power-up, because that is the window the old absolute-uptime gate closed.
+   The host harness proves that case at every uptime instead.
