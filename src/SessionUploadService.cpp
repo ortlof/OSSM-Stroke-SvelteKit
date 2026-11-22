@@ -167,6 +167,14 @@ void SessionUploadService::captureLoop()
                 flushSamples(settings, true);
                 closeSession(settings);
             }
+            // Give the TLS session back to the heap. Holding it keeps the largest
+            // CONTIGUOUS block at about 28,660, which is below the ~50 kB a COLD handshake
+            // needs (measured: 53,236 succeeds, 45,044 and 38,900 fail) - so without this
+            // the archive opens one session per boot and then cannot open another. Dropped
+            // here and on the operator's close, never while a session is open, and a failed
+            // request already stops the client on its own.
+            _client.stop();
+            _clientStarted = false;   // so setCACert() runs again before the next request
             _ringCount = 0;
             _ringWrite = 0;
             status = "off";
@@ -230,6 +238,8 @@ void SessionUploadService::captureLoop()
         {
             flushSamples(settings, true);
             closeSession(settings);
+            _client.stop();           // release the session: see the note above
+            _clientStarted = false;
             status = "idle";
         }
         else if (_recording)
