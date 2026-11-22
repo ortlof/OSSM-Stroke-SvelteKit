@@ -52,13 +52,12 @@ static void uncaughtExceptionHandler()
     std::type_info *info = abi::__cxa_current_exception_type();
     if (info != nullptr)
     {
-        int status = 0;
-        char *pretty = abi::__cxa_demangle(info->name(), nullptr, nullptr, &status);
-        Serial.printf("  type: %s\n", (status == 0 && pretty != nullptr) ? pretty : info->name());
-        if (pretty != nullptr)
-        {
-            free(pretty);
-        }
+        // No demangle. __cxa_demangle allocates, and this handler runs precisely
+        // when allocation is what failed - an abort inside the abort reporter
+        // tells nobody anything, and a demangler frame in the crash backtrace is
+        // indistinguishable from the real fault. The mangled name is enough to
+        // separate a bad_alloc (memory) from a logic fault.
+        Serial.printf("  type: %s\n", info->name());
     }
     else
     {

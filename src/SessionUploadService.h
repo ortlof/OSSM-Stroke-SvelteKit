@@ -58,6 +58,22 @@
 // of static buffer is a kilobyte the TLS handshake cannot have, and the handshake
 // needs one large CONTIGUOUS block - which is the scarce resource on this board.
 #define SESSION_UPLOAD_BATCH_MAX 10
+
+// How many times the uploader may re-attempt a failed session open before it
+// stops and waits for the operator. An unbounded retry is what turns a network
+// fault into an ABORT: each attempt runs a full TLS handshake, mbedTLS allocates
+// and frees tens of kilobytes, a failed handshake leaves the heap more
+// fragmented than it found it, and eventually an allocation elsewhere in the
+// firmware throws std::bad_alloc - which is an abort, because nothing catches it.
+// The next Record press starts a fresh run of attempts.
+#define SESSION_UPLOAD_OPEN_MAX_TRIES 5
+
+// Do not even open a socket below this much largest CONTIGUOUS heap. Measured on
+// a healthy board: max_alloc_heap is about 57 kB, while a handshake at 34.8 kB
+// already fails with "X509 - Certificate verification failed" even with a
+// correct CA. The guard reports the real number when it refuses, so the true
+// floor is read from the log instead of guessed here.
+#define SESSION_UPLOAD_MIN_MAX_ALLOC 32000
 #define SESSION_UPLOAD_CAPTURE_MS 100
 #define SESSION_UPLOAD_FLUSH_MS 5000
 #define SESSION_UPLOAD_TIMEOUT_MS 7000
@@ -213,6 +229,10 @@ private:
     // behaviour towards an endpoint that is failing.
     uint32_t _retryAfterMs = 0;
     uint32_t _consecutiveFailures = 0;
+    // Latched when the attempts ran out, cleared when the operator releases
+    // Record: a fresh press gets a fresh run, and an operator who does nothing
+    // cannot keep the retry storm alive.
+    bool _gaveUp = false;
     // The same discipline for the sample flush, and it was MISSING at first: the
     // flush path retried on every capture tick, so a failing handshake was
     // re-attempted ten times a second while the machine ran, starved the idle

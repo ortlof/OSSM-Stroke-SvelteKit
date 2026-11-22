@@ -84,16 +84,26 @@ void SessionUploadService::begin()
     _fsPersistence.readFromFS();
     _httpEndpoint.begin();
 
-    // 16 kB, and this number is a compromise the hardware forces: the mbedTLS
-    // handshake needs BOTH a deep stack AND one large contiguous heap allocation,
-    // and this task's stack comes out of that same DRAM. Measured: at 24576 the
-    // largest contiguous block fell from 42,996 to 34,804 and the handshake
-    // failed with "X509 - Certificate verification failed" even though the CA was
-    // correct; at 16384 it succeeds. At 16384 the task's own watermark is about
-    // 5 kB used, and it survives a stationary session. The ring buffer and the
-    // POST body are kept small for the same reason - every kilobyte of static
-    // buffer is a kilobyte the handshake cannot have.
-    xTaskCreatePinnedToCore(taskEntry, "sessionUpload", 16384, this, 1, &_taskHandle, 0);
+    // Stack is 16 kB, and that number is a compromise the hardware forces: the
+    // mbedTLS handshake needs BOTH a deep stack AND one large contiguous heap
+    // allocation, and this task's stack comes out of that same DRAM. Measured: at
+    // 24576 the largest contiguous block fell from 42,996 to 34,804 and the
+    // handshake failed with "X509 - Certificate verification failed" even though
+    // the CA was correct; at 16384 it succeeds. At 16384 the task's own watermark
+    // is about 5 kB used. The ring buffer and the POST body are kept small for the
+    // same reason - every kilobyte of static buffer is a kilobyte the handshake
+    // cannot have.
+    //
+    // Priority 0 - the same as the idle task - and that is the second half of the
+    // same lesson. At priority 1 the handshake, which is CPU work with no yield
+    // point inside it, starved the core-0 idle task until the task watchdog RESET
+    // the board mid-handshake. The fix then was disableCore0WDT(), which is worse
+    // than the disease: it does not really turn the watchdog back on, so the idle
+    // task stays unsubscribed and logs "esp_task_wdt_reset: task not found" on
+    // every idle loop - thousands of lines a second, for the rest of the uptime,
+    // with the watchdog dead. At the idle priority the scheduler time-slices this
+    // task against the idle task, so the watchdog is fed without being touched.
+    xTaskCreatePinnedToCore(taskEntry, "sessionUpload", 16384, this, 0, &_taskHandle, 0);
 }
 
 void SessionUploadService::taskEntry(void *param)
@@ -124,6 +134,14 @@ void SessionUploadService::captureLoop()
         // Signed difference, so the millis() wrap does not matter.
         const bool retryDue = ((int32_t)(millis() - _retryAfterMs) >= 0);
 
+        // A released Record clears the give-up latch: the next press is a fresh
+        // run of attempts, and an operator who leaves Record alone cannot keep the
+        // retry storm alive.
+        if (!wantRecording && !_recording)
+        {
+            _gaveUp = false;
+        }
+
         const char *status = "idle";
         const char *error = "";
 
@@ -151,7 +169,7 @@ void SessionUploadService::captureLoop()
             // failing the handshake and calling it a network error.
             status = "clock";
         }
-        else if (wantRecording && !_recording && retryDue)
+        else if (wantRecording && !_recording && !_gaveUp && retryDue)
         {
             if (openSession(settings))
             {
@@ -164,23 +182,36 @@ void SessionUploadService::captureLoop()
             {
                 status = "error";
                 error = (_lastError.length() > 0) ? _lastError.c_str() : "session could not be opened";
-                // 2 s, 4 s, 6 s ... capped at 30 s. Each step is CPU work on this
-                // core, so a tight loop is both rude to the endpoint and fatal to
-                // the idle task that feeds the watchdog.
+                // 2 s, 4 s, 6 s ... capped at 60 s, and then it STOPS. Each attempt
+                // is a full TLS handshake, so an unbounded retry is both rude to the
+                // endpoint and the thing that fragments the heap until an allocation
+                // throws and the board aborts.
                 _consecutiveFailures++;
-                uint32_t waitMs = 2000u * _consecutiveFailures;
-                if (waitMs > 30000u)
+                if (_consecutiveFailures >= (uint32_t)SESSION_UPLOAD_OPEN_MAX_TRIES)
                 {
-                    waitMs = 30000u;
+                    _gaveUp = true;
+                    _retryAfterMs = 0;
+                    Serial.printf("sessionUpload: stopped after %u attempts (%s)\n",
+                                  (unsigned)_consecutiveFailures,
+                                  _lastError.length() ? _lastError.c_str() : "?");
                 }
-                _retryAfterMs = millis() + waitMs;
+                else
+                {
+                    uint32_t waitMs = 2000u * _consecutiveFailures;
+                    if (waitMs > 60000u)
+                    {
+                        waitMs = 60000u;
+                    }
+                    _retryAfterMs = millis() + waitMs;
+                }
             }
         }
         else if (wantRecording && !_recording)
         {
-            // Inside the backoff window: report the last reason and wait.
+            // Inside the backoff window, or stopped after too many attempts.
             status = "error";
-            error = (_lastError.length() > 0) ? _lastError.c_str() : "waiting to retry";
+            error = _gaveUp ? "stopped after repeated failures - release and press Record again"
+                            : ((_lastError.length() > 0) ? _lastError.c_str() : "waiting to retry");
         }
         else if (!wantRecording && _recording)
         {
@@ -350,13 +381,23 @@ bool SessionUploadService::postJson(const char *path, const char *body, size_t b
         _clientStarted = true;
     }
 
-    // The TLS handshake is CPU work with no yield point inside it, and this task
-    // runs on core 0. With the idle-task watchdog armed (CONFIG_ESP_TASK_WDT_
-    // TIMEOUT_S=5 and CHECK_IDLE_TASK_CPU0=1) the machine RESET mid-handshake
-    // instead of reporting a network error, which also hid the error itself. The
-    // request is bounded by the HTTP timeout, so the window is bounded, and it is
-    // closed again on every path out of this function.
-    const bool wdtWasArmed = disableCore0WDT();
+    // Do not open a socket at all when the heap cannot fit a handshake. Trying and
+    // failing is worse than not trying: mbedTLS allocates and frees tens of
+    // kilobytes, the failed handshake leaves the heap more fragmented than it
+    // found it, and the next allocation anywhere in the firmware - a String, a
+    // JSON object - throws std::bad_alloc, which aborts the board because nothing
+    // catches it. This is the cascade the serial log shows: repeated
+    // "X509 - Allocation of memory failed", then "BIGNUM - Memory allocation
+    // failed", then abort.
+    const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+    if (maxAlloc < (uint32_t)SESSION_UPLOAD_MIN_MAX_ALLOC)
+    {
+        _lastError = "low heap (max_alloc=";
+        _lastError += (int)maxAlloc;
+        _lastError += ")";
+        response = _lastError;
+        return false;
+    }
 
     bool ok = false;
     if (!_https.begin(_client, url))
@@ -419,10 +460,6 @@ bool SessionUploadService::postJson(const char *path, const char *body, size_t b
         }
     }
 
-    if (wdtWasArmed)
-    {
-        enableCore0WDT();
-    }
     return ok;
 }
 
