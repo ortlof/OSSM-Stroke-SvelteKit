@@ -922,11 +922,25 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm, 
         // The drive counts down as the carriage goes up on this machine, so the
         // reference is subtracted the other way round when mbInvert is set.
         actual = invert ? (int)(_posRefDrive - drive) : (int)(drive - _posRefDrive);
-        lost = expected - actual;
-        if (countsPerMm != 0)
-        {
-            lostMmMilli = (int)(((int64_t)lost * 1000000) / countsPerMm);
-        }
+        // NO LOST-STEP FIGURE IS PUBLISHED, and that is deliberate, not an omission.
+        //
+        // `expected` is the firmware's own step count converted with ITS steps-per-mm;
+        // `actual` is the drive's position register in the drive's own counts. They are
+        // not the same quantity and they do not share a zero. Measured on the machine:
+        // 48.66 mm of travel was 4,129 firmware counts but 9,870 drive counts, so the two
+        // scales differ by a factor of about 2.4, and the drive's register is absolute
+        // while the firmware rebases at homing. Subtracting them published
+        // "13999 counts / 164.9 mm of lost steps" while the drive's own command and
+        // feedback counters read equal - zero deviation. A field that claims the machine
+        // is dropping a third of its travel when it is not is worse than no field at all.
+        //
+        // -1 means unknown. Making it real needs the drive's counts-per-mm measured, not
+        // assumed: one supervised move with this register read before and after settles
+        // the ratio, and then the loss can be computed in ONE frame.
+        lost = -1;
+        lostMmMilli = -1;
+        (void)expected;
+        (void)actual;
     }
 
     update([&](ModbusProbeState &s)

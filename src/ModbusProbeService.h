@@ -182,10 +182,16 @@ public:
     int mbReg = -1;            // raw drive register value, -1 if unknown
     int mbFwMmMilli = 0;       // firmware position in milli-mm
     int mbTravelledMilli = 0;  // mm travelled since the reference, milli-mm
-    int mbExpected = 0;        // drive counts expected from the mm travelled
-    int mbActual = 0;          // drive counts actually seen since the reference
-    int mbLost = 0;            // lost counts (expected - actual)
-    int mbLostMmMilli = 0;
+    int mbExpected = 0;    // firmware counts for the mm travelled, on ITS OWN scale
+    int mbActual = 0;      // the drive's own count delta since the reference
+    // -1 = NOT MEASURED, and these are deliberately not computed any more. The firmware's
+    // step count and the drive's position register are different quantities on different
+    // scales (measured: 48.66 mm was 4,129 firmware counts but 9,870 drive counts) and
+    // they do not share a zero. Subtracting them invented ~165 mm of "lost steps" on a
+    // machine whose drive reported zero deviation. A real figure needs the drive's
+    // counts-per-mm measured first - see the long note in ModbusProbeService.cpp.
+    int mbLost = -1;           // -1 = unknown, never a measurement
+    int mbLostMmMilli = -1;    // -1 = unknown, never a measurement
     bool mbSettled = false;  // the last comparison was taken with the machine at rest     // lost millimetres, milli-mm
 
     String msg = "";  // short headline for the UI / a rejection reason
