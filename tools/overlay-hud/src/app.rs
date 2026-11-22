@@ -792,6 +792,13 @@ fn v_slider(
     label_font: f32,
 ) -> bool {
     let mut sent = false;
+    // Room on the left for a vertical label; the rail shifts right of it. Every
+    // part that belongs to the rail - the value, both nudge caps and the handle -
+    // is placed on the rail centre `cx`, never on the column centre: the label
+    // column pushes the rail right, so anything centred on the column hangs off
+    // the rail's left edge by half the label column (6.5 points, about 4 pixels
+    // at the usual zoom - the handle used to, which is what made it look off).
+    const LABEL_COL: f32 = 13.0;
     ui.vertical(|ui| {
         // The value sits above the rail, where it can be read without covering
         // anything, instead of inside the handle.
@@ -801,14 +808,15 @@ fn v_slider(
             FontId::proportional(12.5),
             label_c(),
         );
-        ui.painter()
-            .galley(val_rect.center() - vgalley.size() / 2.0, vgalley, label_c());
+        ui.painter().galley(
+            egui::pos2(val_rect.center().x + LABEL_COL * 0.5, val_rect.center().y) - vgalley.size() / 2.0,
+            vgalley,
+            label_c(),
+        );
 
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), Sense::click_and_drag());
         *active = resp.dragged() || resp.is_pointer_button_down_on();
 
-        // Room on the left for a vertical label; the rail shifts right of it.
-        const LABEL_COL: f32 = 13.0;
         let rail_w = ((rect.width() - LABEL_COL) * 0.62).clamp(16.0, 26.0);
         // Two nudge caps: one step per press, for fine work at a distance.
         let CAP: f32 = cap;
@@ -892,9 +900,10 @@ fn v_slider(
         painter.rect_filled(rail, radius, rail_c());
 
         // The handle is exactly as wide as its rail: one continuous instrument
-        // rather than a fat block on a thin stick.
+        // rather than a fat block on a thin stick. It rides the rail centre, so
+        // it covers the rail and nothing else.
         let thumb = Rect::from_center_size(
-            egui::pos2(rect.center().x, thumb_y),
+            egui::pos2(cx, thumb_y),
             egui::vec2(rail_w, thumb_h * 2.1),
         );
         let hot = resp.hovered() || resp.dragged();
