@@ -129,6 +129,14 @@ The table (indices are stable; the last six were appended):
 | 13 | Random Stroke | a random target at least a sensation-set distance from the last |
 | 14 | Point | park at one point inside the sweep |
 
+**Nothing upstream describes the six fray-d patterns.** Its `Pattern.mdx` documents
+only indices 0–6 and even says Jack Hammer and Stroke Nibbler are "available in the
+library but not currently implemented in the firmware". The six exist only in
+`pattern.h` on `main`/`New-Protocols`, reachable through the `StrokePatterns` enum
+and `Pattern::Create()`. So the behaviour noted above for those six is read from
+their code — it is not an upstream statement of intent, and it has not been
+confirmed against whoever wrote them.
+
 **The contract, and it is the point:** a pattern is handed the stroke LENGTH in mm
 and the full-stroke TIME in seconds, and answers with a position in **0..stroke, in
 millimetres**, relative to the near end of the sweep, plus mm/s and mm/s².
