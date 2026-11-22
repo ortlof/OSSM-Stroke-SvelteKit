@@ -13,7 +13,22 @@
 
 #include <Arduino.h>
 #include "MotionDriver.h"
-#include <pattern.h>
+#include <Pattern.h>
+
+/**************************************************************************/
+/*!
+  @brief  One move, in the engine's own units: steps, steps/s, steps/s^2 and an
+          absolute step position. A pattern speaks millimetres and a position
+          relative to the near end of the sweep; _toMotionParameter() is the only
+          place the two meet.
+*/
+/**************************************************************************/
+typedef struct {
+    int stroke;         //!< Absolute and properly constrained target position of a move in steps
+    int speed;          //!< Speed of a move in Steps/second
+    int acceleration;   //!< Acceleration to get to speed or halt
+    bool skip;          //!< no valid stroke, skip this set and query for the next --> allows pauses between strokes
+} motionParameter;
 
 // Debug Levels
 //#define DEBUG_TALKATIVE             // Show debug messages from the StrokeEngine on Serial
@@ -426,9 +441,7 @@ class StrokeEngine {
           @return The number of pattern available.
         */
         /**************************************************************************/
-        unsigned int getNumberOfPattern() { 
-          return patternTableSize; 
-        };
+        unsigned int getNumberOfPattern();
 
         /**************************************************************************/
         /*!
@@ -521,6 +534,13 @@ class StrokeEngine {
         TaskHandle_t _taskStreamingHandle = NULL;
         SemaphoreHandle_t _patternMutex = xSemaphoreCreateMutex();
         void _applyMotionProfile(motionParameter* motion);
+
+        //! Convert one pattern move (millimetres, relative to the near end of the
+        //! sweep) into the engine's step space and add the depth offset.
+        motionParameter _toMotionParameter(const motionParameters_t &patternMove) const;
+
+        //! The stroke length in millimetres, which is what a pattern is handed.
+        float _strokeMm() const { return float(_stroke) / _motor->stepsPerMillimeter; }
         void _injectCurrentPatternSettings();
         void _updatePatternTimeFromLinearSpeed();
         int _resolveStopAcceleration(float decelerationMmPerSecondSquared);

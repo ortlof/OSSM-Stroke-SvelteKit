@@ -3,7 +3,7 @@
 #include <math.h>
 #include <StrokeEngine.h>
 #include "FastAccelStepperMotionDriver.h"
-#include <pattern.h>
+#include <PatternLib.h>
 
 void StrokeEngine::begin(machineGeometry *physics, motorProperties *motor) {
     begin(physics, motor, NULL);
@@ -154,7 +154,8 @@ void StrokeEngine::setDepth(float depth, bool applyNow = false) {
         // Constrain depth between minStep and maxStep
         _depth = constrain(int(depth * _motor->stepsPerMillimeter), _minStep, _maxStep); 
 
-        patternTable[_patternIndex]->setDepth(_depth);
+        // No setDepth() any more: the engine owns the depth offset and applies it
+        // in _toMotionParameter(). A pattern only ever sees the stroke window.
 
 #ifdef DEBUG_TALKATIVE
         Serial.println("setDepth: " + String(_depth));
@@ -193,7 +194,7 @@ void StrokeEngine::setStroke(float stroke, bool applyNow = false) {
         _stroke = constrain(int(stroke * _motor->stepsPerMillimeter), _minStep, _maxStep); 
         _updatePatternTimeFromLinearSpeed();
 
-        patternTable[_patternIndex]->setStroke(_stroke);
+        patternTable[_patternIndex]->setStroke(_strokeMm());
         patternTable[_patternIndex]->setTimeOfStroke(_timeOfStroke);
 
 #ifdef DEBUG_TALKATIVE
@@ -475,10 +476,11 @@ void StrokeEngine::_updatePatternTimeFromLinearSpeed() {
 
 void StrokeEngine::_injectCurrentPatternSettings() {
     _updatePatternTimeFromLinearSpeed();
-    patternTable[_patternIndex]->setSpeedLimit(_maxStepPerSecond, _maxStepAcceleration, _motor->stepsPerMillimeter);
+    // setSpeedLimit() and setDepth() went with the old contract. A pattern no
+    // longer carries the machine envelope or the depth offset; the engine clips
+    // in _toMotionParameter() and _applyMotionProfile().
     patternTable[_patternIndex]->setTimeOfStroke(_timeOfStroke);
-    patternTable[_patternIndex]->setStroke(_stroke);
-    patternTable[_patternIndex]->setDepth(_depth);
+    patternTable[_patternIndex]->setStroke(_strokeMm());
     patternTable[_patternIndex]->setSensation(_sensation);
     patternTable[_patternIndex]->setEndpointDwellMillis(_endpointDwellMillis);
 }
@@ -808,6 +810,13 @@ String StrokeEngine::getPatternName(int index) {
     
 }
 
+// Defined here rather than inline in the header: the pattern table lives in this
+// translation unit, because a table in a header gives every including unit its
+// own copy of every pattern object.
+unsigned int StrokeEngine::getNumberOfPattern() {
+    return patternTableSize;
+}
+
 void StrokeEngine::setMaxSpeed(float maxSpeed){
     if (xSemaphoreTake(_patternMutex, portMAX_DELAY) == pdTRUE) {
         _motor->maxSpeed = max(0.0f, maxSpeed);
@@ -815,7 +824,6 @@ void StrokeEngine::setMaxSpeed(float maxSpeed){
         _linearSpeedMmPerSecond = constrain(_linearSpeedMmPerSecond, 0.0f, _motor->maxSpeed);
         _linearSpeedStepsPerSecond = max(1, int(0.5f + _linearSpeedMmPerSecond * _motor->stepsPerMillimeter));
         _updatePatternTimeFromLinearSpeed();
-        patternTable[_patternIndex]->setSpeedLimit(_maxStepPerSecond, _maxStepAcceleration, _motor->stepsPerMillimeter);
         patternTable[_patternIndex]->setTimeOfStroke(_timeOfStroke);
         xSemaphoreGive(_patternMutex);
     }
@@ -830,7 +838,6 @@ void StrokeEngine::setMaxAcceleration(float maxAcceleration) {
         _motor->maxAcceleration = max(0.0f, maxAcceleration);
         _maxStepAcceleration = int(0.5f + _motor->maxAcceleration * _motor->stepsPerMillimeter);
         _defaultStopAcceleration = constrain(_defaultStopAcceleration, 1, _maxStepAcceleration);
-        patternTable[_patternIndex]->setSpeedLimit(_maxStepPerSecond, _maxStepAcceleration, _motor->stepsPerMillimeter);
         xSemaphoreGive(_patternMutex);
     }
 }
@@ -1099,7 +1106,7 @@ void StrokeEngine::_stroking() {
 
             if (_applyUpdate == true) {
                 // Ask pattern for update on motion parameters
-                currentMotion = patternTable[_patternIndex]->nextTarget(_index);
+                currentMotion = _toMotionParameter(patternTable[_patternIndex]->nextTarget(_index));
 
                 // Increase deceleration if required to avoid crash
                 if (_driver != NULL && _driver->getAcceleration() > currentMotion.acceleration) {
@@ -1124,7 +1131,7 @@ void StrokeEngine::_stroking() {
                 _index++;
 
                 // Query new set of pattern parameters
-                currentMotion = patternTable[_patternIndex]->nextTarget(_index);
+                currentMotion = _toMotionParameter(patternTable[_patternIndex]->nextTarget(_index));
 
                 // Pattern may introduce pauses between strokes
                 if (currentMotion.skip == false) {
@@ -1162,6 +1169,33 @@ void StrokeEngine::_streaming() {
         // Delay 10ms 
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The one bridge between the two unit systems.
+//
+// A pattern answers with a position in 0 .. stroke, in millimetres, relative to
+// the near end of the sweep, plus a speed in mm/s and an acceleration in mm/s^2.
+// The engine works in steps with absolute positions. Everything a pattern is
+// allowed to get wrong is clamped here: a target outside the stroke window, a
+// zero or negative speed (a zero-speed move is a hang, not a move - the driver
+// stays idle and the pattern task asks for the same move forever) and a negative
+// acceleration. _applyMotionProfile() then has the final word on the machine
+// envelope.
+// ---------------------------------------------------------------------------
+motionParameter StrokeEngine::_toMotionParameter(const motionParameters_t &patternMove) const {
+
+    motionParameter move;
+
+    move.skip = patternMove.skip;
+
+    float targetMm = constrain(patternMove.stroke, 0.0f, _strokeMm());
+    move.stroke = (_depth - _stroke) + int(0.5f + targetMm * _motor->stepsPerMillimeter);
+
+    move.speed = max(1, int(0.5f + fmaxf(0.0f, patternMove.speed) * _motor->stepsPerMillimeter));
+    move.acceleration = max(1, int(0.5f + patternMove.acceleration * _motor->stepsPerMillimeter));
+
+    return move;
 }
 
 void StrokeEngine::_applyMotionProfile(motionParameter* motion) {
