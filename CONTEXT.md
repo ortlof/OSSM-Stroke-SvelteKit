@@ -597,8 +597,17 @@ service over the internet rather than being pulled from it. That service is **LX
   Modbus function-3 range read (the reply returns the PREVIOUS read, so read twice).
   `/rest/features` does NOT list endpoints - grep the `*_ENDPOINT_PATH` defines.
 - **Open:** the Windows overlay binary in `dist/` predates the Record button until it is
-  rebuilt. The firmware publishes `mb_lost_counts` / `mb_lost_mm_milli` as a
+  rebuilt. The firmware published `mb_lost_counts` / `mb_lost_mm_milli` as a
   reference-alignment artefact - it read 165 mm of "lost steps" while the drive's own
-  counters agreed exactly (deviation 0), so that telemetry is a phantom and wants fixing
-  or removing. The archive holds empty test rows 6-11 alongside the real runs 3, 4, 5 and
-  12.
+  counters agreed exactly (deviation 0). **FIXED in 0.7.5: both fields now report -1 =
+  unknown.** They were the difference between two quantities in different frames: the
+  firmware's step count on its own scale against the drive's absolute register. Measured,
+  48.66 mm of travel was 4,129 firmware counts but 9,870 drive counts, and the drive's
+  register read -532, -568 and -9870 on different boots, so neither the scale nor the zero
+  matches. It read 0 while the machine sat at its reference and grew with travel, i.e. it
+  looked plausible exactly where it would be checked first. A real figure needs the
+  drive's counts-per-mm MEASURED: one supervised move with that register read before and
+  after settles the ratio, and then the loss can be computed in one frame.
+- **The archive holds only real data now.** The empty test rows 6-11 were deleted on
+  22 Nov 2026 (guarded on "no samples attached"); what remains is sessions 3 (159
+  samples), 4 (200), 5 (606) and 12 (381).

@@ -881,8 +881,13 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm, 
     int travelledMilli = 0;
     int expected = 0;
     int actual = 0;
-    int lost = 0;
-    int lostMmMilli = 0;
+    // -1 FROM THE START, so a poll that produced nothing also publishes "unknown".
+    // The declared 0 was why the first attempt at this still read 0 on the board: the
+    // computation block publishes -1, but a failed or not-yet-settled poll never reaches
+    // that block, and the declared 0 was published in its place. A default of 0 here
+    // means "zero lost steps", which is a measurement this code cannot make.
+    int lost = -1;
+    int lostMmMilli = -1;
 
     // Lost steps only mean anything when the machine is standing still. While it
     // moves, the drive legitimately trails the command (that is the following
