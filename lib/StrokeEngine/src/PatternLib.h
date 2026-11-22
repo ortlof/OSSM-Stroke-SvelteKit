@@ -1,8 +1,10 @@
 /**
  *   The pattern table.
  *
- *   Ported from openlust/LUST-motion lib/Pattern/PatternLib.h, with our names kept
- *   so the web UI and the REST `pattern_name` field do not change under the user.
+ *   Base layout and the first nine patterns come from openlust/LUST-motion
+ *   lib/Pattern/PatternLib.h, with our names kept so the web UI and the REST
+ *   `pattern_name` field do not change under the user. The last six come from
+ *   fray-d/OSSM-Lite (Software/lib/StrokeEngine/src/pattern.h).
  *
  * Copyright (C) 2025 theelims <elims@gmx.net>
  *
@@ -23,6 +25,13 @@
 #include <Insist.h>
 #include <Knot.h>
 #include <RandomDepth.h>
+// from fray-d/OSSM-Lite:
+#include <HalfnOut.h>
+#include <ProgressiveStroke.h>
+#include <KnotStroke.h>
+#include <SlapStroke.h>
+#include <RandomStroke.h>
+#include <PointStroke.h>
 // <-- include your new pattern class here!
 
 extern "C"
@@ -36,6 +45,12 @@ extern "C"
     static Insist insist("Insist");
     static Knot knot("Knot");
     static RandomDepth randomDepth("RandomDepth");
+    static HalfnOut halfnOut("Half'n'Out");
+    static ProgressiveStroke progressiveStroke("Progressive");
+    static KnotStroke knotStroke("Knot Stroke");
+    static SlapStroke slapStroke("Slap");
+    static RandomStroke randomStroke("Random Stroke");
+    static PointStroke pointStroke("Point");
     // <-- instantiate your new pattern class here!
 
     /**************************************************************************/
@@ -52,7 +67,15 @@ extern "C"
         &stopNGo,
         &insist,
         &knot,
-        &randomDepth
+        &randomDepth,
+        // Appended, so the indices the UI and any saved state already use keep
+        // pointing at the same pattern.
+        &halfnOut,
+        &progressiveStroke,
+        &knotStroke,
+        &slapStroke,
+        &randomStroke,
+        &pointStroke
         // <-- insert your new pattern class here!
     };
 

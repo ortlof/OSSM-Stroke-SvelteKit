@@ -103,6 +103,15 @@ public:
     */
     char *getName() { return _name; }
 
+    //! The peak speed of a 1/3-1/3-1/3 trapezoid covering the whole stroke in the
+    //! half-stroke time the engine handed us. That is the speed the user asked
+    //! for, so a pattern that wants "half speed" or "the maximum" multiplies this
+    //! rather than guessing from a step count. The patterns ported from
+    //! fray-d/OSSM-Lite carried their own `_speed` field for exactly this value.
+    float peakSpeedMmPerSecond() const {
+        return 1.5f * _stroke / fmaxf(0.005f, _timeOfStroke);
+    }
+
     //! Calculate the position of the next stroke based on the various parameters
     /*!
       @param index index of a stroke. Increments with every new stroke.
