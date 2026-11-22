@@ -121,14 +121,15 @@ are ported so nothing is lost, and Knot's absolute targets are unchanged
 the full-stroke time as if it were the half-stroke time, so every speed they
 commanded was half of what was intended.
 
-Four bugs were found by reviewing the patterns on the host, and **all four are
-still present in LUST-motion `main` and on every branch** — do not assume a fix is
-coming from there:
+Five bugs were found by reviewing the patterns on the host and then verifying on
+the machine, and **all five are still present in LUST-motion `main` and on every
+branch** — do not assume a fix is coming from there:
 
 | Pattern | Error |
 | --- | --- |
 | Insist | the stroke fraction `(100 − abs(s))/100` is exactly 0 at the ±100 the engine clamps to, and `_acceleration` divides by it. Measured **−25,300,232 mm/s² and zero travel**, so the engine clipped the acceleration to 1 step/s² and the machine simply stopped. Floored at 0.05 |
 | Stop'n'Go | `_isStillDelayed()` compared against `_startDelayMillis + delay`, i.e. against **absolute uptime** before the first `_startDelay()`, so the pattern sat out its first pause after every boot — up to 10 s at sensation +100. `_startDelayMillis` was an `int` holding a `millis()` value |
+| Stop'n'Go | `_startDelay()` ran when the out move was **issued**, and the engine only asks for the next target once the driver stops, so the machine moved through most of the delay. Measured at 20 mm/s / 40 mm stroke / sensation 0: a nominal 5050 ms pause lasted **1.90–1.96 s** (5.05 s minus the ~3.1 s out move). At a slow enough speed or a long enough stroke the pause vanishes. Now armed on the move and started on the next call — same run then gave **5.01 / 4.80 / 4.88 s** |
 | Deeper | printed on **every stroke** through `DEBUG_PATTERN`, which was the last debug switch still on. `String` building means malloc and float formatting on the motion task, 6 kB stack |
 | TeasingPounding | one `ESP_LOGV` per stroke on the motion path, removed with the rest of the debug IO |
 
@@ -202,12 +203,16 @@ flash and the pattern table are verified; the carriage has not moved.
 8. **The 1 kg check has not been run yet.** The arithmetic and the at-rest noise floor
    are recorded above; the mass has to go on a vertical axis (or on a pulley) to load
    the axis at all.
-9. **The pattern port has not been motion-verified.** Build, flash and the pattern
-   table are confirmed on 192.168.2.115; nothing has moved. The plan when Basti is at
-   the machine: 20 mm/s, 40 mm stroke, 60 mm depth, one pattern at a time, stop in a
-   `finally` and a hard position limit. Order — Simple Stroke as the baseline, then
-   Knot and RandomDepth (hand-ported and new), then Insist at sensation +100 (the
-   divide-by-zero that used to freeze it), then Stop'n'Go (the pause must still fire).
-   The Stop'n'Go **boot** case cannot be reproduced by hand: it needs a run within
-   ~10 s of power-up, because that is the window the old absolute-uptime gate closed.
-   The host harness proves that case at every uptime instead.
+9. **The pattern port is motion-verified (192.168.2.115, supervised, 20 mm/s,
+   depth 60 / stroke 40 except where noted).** Simple Stroke sweeps 20.1↔59.4 mm at
+   20.3 mm/s with reversals at both ends, full stroke ≈ 6 s as the engine derives.
+   RandomDepth inserts to a different depth every stroke and always returns the full
+   stroke. Knot completes its three phases — out to 20, fast to 40 (50 %), creep to
+   ~56 (92 %), back to 20 — but its creep is 2 % of the commanded speed, so at
+   20 mm/s that phase alone takes ~40 s; at 100 mm/s it is 2 mm/s and the cycle
+   takes ~10 s. That is Knot's design and predates the port, not a regression.
+   Insist at sensation +100 sits at 58–60 mm vibrating over a ~2 mm amplitude and
+   never freezes. Stop'n'Go pauses 5.01/4.80/4.88 s for a nominal 5050 ms.
+   Not yet done on hardware: the Stop'n'Go **boot** case, which needs a run within
+   ~10 s of power-up because that is the window the old absolute-uptime gate closed.
+   The host harness proves that one case at every uptime.
