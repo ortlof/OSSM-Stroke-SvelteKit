@@ -194,9 +194,33 @@ void SessionUploadService::captureLoop()
 
             const bool batchFull = (_ringCount >= settings.batch);
             const bool timeUp = (uint32_t)(millis() - _lastFlushMs) >= SESSION_UPLOAD_FLUSH_MS;
-            if (batchFull || timeUp)
+            // Only attempt a flush when the backoff allows it. Without this gate a
+            // failing handshake is retried every tick, which is a CPU-bound TLS
+            // handshake ten times a second on the motion core's sibling.
+            const bool flushAllowed = ((int32_t)(millis() - _flushRetryAfterMs) >= 0);
+            if ((batchFull || timeUp) && flushAllowed)
             {
-                flushSamples(settings, false);
+                if (flushSamples(settings, false))
+                {
+                    _flushFailures = 0;
+                    _flushRetryAfterMs = 0;
+                }
+                else
+                {
+                    _flushFailures++;
+                    uint32_t waitMs = 3000u * _flushFailures;
+                    if (waitMs > 30000u)
+                    {
+                        waitMs = 30000u;
+                    }
+                    _flushRetryAfterMs = millis() + waitMs;
+                    // Say it once per failure run, not once per tick.
+                    if (_flushFailures == 1)
+                    {
+                        Serial.printf("sessionUpload: flush failing (%s), backing off\n",
+                                      _lastError.length() ? _lastError.c_str() : "unknown");
+                    }
+                }
             }
             status = "recording";
         }

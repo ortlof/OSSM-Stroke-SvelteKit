@@ -51,13 +51,13 @@
 // static buffer is a kilobyte the handshake cannot have. At 48 bytes per sample
 // this array is 9.6 kB, and shrinking it to 600 cost the handshake 29 kB of
 // headroom and failed with "SSL - Memory allocation failed".
-#define SESSION_UPLOAD_RING 200
-#define SESSION_UPLOAD_BATCH_DEFAULT 20
+#define SESSION_UPLOAD_RING 100
+#define SESSION_UPLOAD_BATCH_DEFAULT 10
 // The body for one POST is built in a fixed buffer, so the batch has a hard
-// ceiling: 20 samples at about 170 bytes each is roughly 3.5 kB. A larger batch
-// needs a bigger buffer, and that is DRAM taken from the TLS handshake, so the
-// settings refuse anything above this instead of failing at the send.
-#define SESSION_UPLOAD_BATCH_MAX 20
+// ceiling: 10 samples at about 170 bytes each is roughly 1.7 kB. Every kilobyte
+// of static buffer is a kilobyte the TLS handshake cannot have, and the handshake
+// needs one large CONTIGUOUS block - which is the scarce resource on this board.
+#define SESSION_UPLOAD_BATCH_MAX 10
 #define SESSION_UPLOAD_CAPTURE_MS 100
 #define SESSION_UPLOAD_FLUSH_MS 5000
 #define SESSION_UPLOAD_TIMEOUT_MS 7000
@@ -213,6 +213,13 @@ private:
     // behaviour towards an endpoint that is failing.
     uint32_t _retryAfterMs = 0;
     uint32_t _consecutiveFailures = 0;
+    // The same discipline for the sample flush, and it was MISSING at first: the
+    // flush path retried on every capture tick, so a failing handshake was
+    // re-attempted ten times a second while the machine ran, starved the idle
+    // task and reset the board. Measured: with Record armed the machine ran 12 s
+    // and sent 0 samples, then reset.
+    uint32_t _flushRetryAfterMs = 0;
+    uint32_t _flushFailures = 0;
     // Timestamps are built from the clock once per session plus the monotonic
     // uptime since then: time() only resolves to a second, and a network step of
     // the clock must not put a jump in the middle of a trace.
