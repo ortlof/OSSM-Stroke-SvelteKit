@@ -535,5 +535,36 @@ service over the internet rather than being pulled from it. That service is **LX
   the key (so a GET cannot leak it) also kept it out of the file and the machine forgot
   it on every reboot. Two readers, one updater: `readForFile()` for the file,
   `read()` for HTTP.
+- **Open, and it matters: recording WHILE THE MACHINE MOVES panics the firmware.**
+  Measured: the same 18 s motion (20 mm/s, depth 60, stroke 40) with Record off ran
+  clean; with Record armed the device reset with `Software reset due to exception/
+  panic` and left the session open with 0 samples. The archive itself is fine while the
+  machine stands still - it opens and closes sessions over TLS correctly. Ruled out by
+  measurement, not by argument: the stack (`upload_stack_free` reads ~11 kB free of
+  16 kB *after* a handshake), the CA (the same binary opens a session when stopped), and
+  the watchdog (that was the earlier, separate fault). What is left is something in the
+  capture-or-flush path taken only while the engine runs. **Do not run the machine with
+  Record armed until this is fixed**: a reset de-energises the drive, and on a vertical
+  axis that drops the carriage. The next step is the device's serial log from a
+  reproduction - a panic prints its own backtrace, and nothing else will name it.
+- **The stack and the handshake compete for the same DRAM.** At a 24 kB task stack the
+  largest contiguous heap block fell to 34,804 bytes and the handshake failed with
+  `X509 - Certificate verification failed` although the CA was correct; at 16 kB it is
+  45,044 and works. ~40 kB contiguous is the line. Ship 16 kB and keep the ring and the
+  POST body small.
+- **A serial console is served at `/serial`** (`serial-console.html`, same gate as the
+  dashboard). It exists because Web Serial needs a SECURE CONTEXT - a browser hands out
+  serial ports to https or localhost and nothing else - and because a panic prints its own
+  backtrace to UART and nowhere else. It timestamps lines, marks the panic lines
+  (`Guru Meditation`, `Backtrace:`, `Stack canary`, `watchdog`, the reset reason), keeps
+  DTR/RTS low on connect so it does not reset a running machine, and has a "Copy for
+  chat" that returns just the panic block. The same file also works opened directly
+  (`file://` counts as a secure context), so no login is needed if it is opened locally.
+- **Heap leaks across TLS sessions, and it explains the resets better than motion did.**
+  Measured: 90,108 bytes free with a 45,044 largest block after a boot, and 45,308 free
+  with 28,660 largest after several sessions - below the ~40 kB a handshake needs. A
+  reset then happens even with the machine STANDING STILL. So "recording while moving
+  panics" was a correlation of timing, not the mechanism; treat the depleted heap as the
+  cause to chase, and say so rather than repeating the earlier attribution.
 - **Open:** the Windows overlay binary in `dist/` predates the Record button until it is
   rebuilt; and a supervised motion run is still needed to see samples arrive.

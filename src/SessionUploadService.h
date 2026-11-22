@@ -218,6 +218,11 @@ private:
     // the clock must not put a jump in the middle of a trace.
     int64_t _baseEpochMs = 0;
     uint32_t _baseUptimeMs = 0;
+    // Counters are published at most once a second. Sending them on every 100 ms
+    // tick adds nothing a human can read, and it doubles the event rate exactly
+    // when the engine is already pushing telemetry at 10 Hz - the moment the
+    // device is busiest. State transitions are still published immediately.
+    uint32_t _lastStatusPublishMs = 0;
 };
 
 #endif  // SessionUploadService_h

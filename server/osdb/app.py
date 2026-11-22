@@ -32,15 +32,30 @@ INGEST_KEY_FILE = os.environ.get("OSSM_INGEST_KEY_FILE", "/etc/osdb/ingest.key")
 DASH_USER = os.environ.get("OSSM_DASH_USER", "osdb")
 DASH_PASS_FILE = os.environ.get("OSSM_DASH_PASS_FILE", "/etc/osdb/dashboard.pass")
 
-# Only these networks may open the dashboard. 10.99.10.0/24 is this LAN, and
-# 100.64.0.0/10 is the CGNAT range Tailscale uses.
+# Only these networks may open the dashboard or the serial console. 10.99.10.0/24 is this
+# LAN, 100.64.0.0/10 is the CGNAT range Tailscale uses, and 127.0.0.0/8 is loopback.
+#
+# The operator's own connection is a public address, and the proxy forwards the real
+# client address, so his home IP has to be named here or the pages refuse him - the same
+# treatment his CrowdSec whitelist gets on npn. Anything further can be added without a
+# code change through OSSM_EXTRA_ALLOW (comma separated), so a dynamic address does not
+# need an edit and a redeploy.
 ALLOWED_NETS = [
     ipaddress.ip_network("10.99.10.0/24"),
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("84.191.41.89/32"),
 ]
 
 app = Flask(__name__)
+
+for _extra in (os.environ.get("OSSM_EXTRA_ALLOW") or "").split(","):
+    _extra = _extra.strip()
+    if _extra:
+        try:
+            ALLOWED_NETS.append(ipaddress.ip_network(_extra))
+        except ValueError:
+            app.logger.warning("ignoring unparsable OSSM_EXTRA_ALLOW entry: %r", _extra)
 
 
 def _secret(path):
@@ -288,6 +303,21 @@ def session_detail(sid):
         + _chart(pts, "torque_pct", "torque %, signed (+ outward)")
         + _chart(pts, "position_mm", "position mm"),
     )
+
+
+@app.get("/serial")
+@dashboard_auth
+def serial_console():
+    """The Web Serial console for the machine's own USB port.
+
+    It is served from here for one reason: a SECURE CONTEXT. A browser hands out
+    serial ports to https or localhost and to nothing else, so a page on plain
+    http can never open the port however well it is written. Same gate as the
+    dashboard - allowlist and password - because this page can drive the board.
+    """
+    path = os.environ.get("OSSM_SERIAL_PAGE", "serial-console.html")
+    with open(path, "rb") as fh:
+        return Response(fh.read(), mimetype="text/html")
 
 
 def _n(v, digits):

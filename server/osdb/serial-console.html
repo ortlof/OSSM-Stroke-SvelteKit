@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OSSM serial console</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         background: #14161b; color: #dfe3ec; }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+           padding: 10px 14px; border-bottom: 1px solid #2a2e38; background: #191c22; }
+  h1 { font-size: 14px; margin: 0 12px 0 0; font-weight: 600; letter-spacing: .02em; }
+  button { font: inherit; padding: 6px 12px; border-radius: 7px; border: 1px solid #39404e;
+           background: #232833; color: #dfe3ec; cursor: pointer; }
+  button:hover:not(:disabled) { background: #2c323f; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.connect { background: #21402f; border-color: #2f6b4a; }
+  button.disconnect { background: #43222a; border-color: #7a3a45; }
+  label { display: flex; align-items: center; gap: 5px; color: #9aa3b5; }
+  select, input[type=number] { font: inherit; background: #232833; color: #dfe3ec;
+           border: 1px solid #39404e; border-radius: 7px; padding: 5px 7px; }
+  #status { margin-left: auto; color: #9aa3b5; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+         background: #6b7280; margin-right: 6px; vertical-align: middle; }
+  .dot.on { background: #4ade80; }
+  .dot.off { background: #6b7280; }
+  main { padding: 0 0 12px; }
+  #log { margin: 0; padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
+         height: calc(100vh - 132px); overflow-y: auto; }
+  .t { color: #5b6478; }
+  .panic { background: #3a1b1f; color: #ffc9c9; display: block; }
+  .warn { color: #f5d68a; }
+  .sys { color: #7f8aa3; font-style: italic; }
+  .note { padding: 8px 14px; color: #8d96a8; border-top: 1px solid #2a2e38;
+          background: #191c22; font-size: 12px; }
+  .flash { background: #4ade80 !important; color: #08130c !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>OSSM serial console</h1>
+  <button id="connect" class="connect">Connect</button>
+  <button id="disconnect" class="disconnect" disabled>Disconnect</button>
+  <label>baud
+    <select id="baud">
+      <option>115200</option><option>230400</option><option>921600</option>
+      <option>9600</option><option>57600</option><option>74880</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="noreset" checked> do not reset the board</label>
+  <label><input type="checkbox" id="follow" checked> follow</label>
+  <button id="copy">Copy for chat</button>
+  <button id="download">Download</button>
+  <button id="clear">Clear</button>
+  <span id="status"><span class="dot off"></span>disconnected</span>
+</header>
+
+<main><pre id="log"></pre></main>
+<div class="note">
+  <b>Use Chrome or Edge.</b> Pick the board's USB port when the browser asks. The port is
+  offered by this page only after a click, and only over https or localhost - that is the
+  browser's rule for serial access, not a setting here.
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+let port = null, reader = null, writer = null, keepReading = false;
+let connected = false;
+
+function stamp() {
+  const d = new Date();
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+// A panic is the whole point of this page, so it gets seen: the ESP32 prints
+// "Guru Meditation Error", a "Backtrace:", "Stack canary", "abort()" or an "assert"
+// and then reboots. Those lines are marked, and Copy for chat returns just them
+// when they exist.
+const PANIC = /Guru Meditation|Backtrace:|Stack canary|abort\(\)|assert|panic|core panic|rst:0x|Rebooting|watchdog|StoreProhibited|LoadProhibited|IllegalInstruction|InstrFetchProhibited|Cache disabled/i;
+
+function append(text) {
+  const wasAtBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
+  const frag = document.createDocumentFragment();
+  for (const raw of text.split("\n")) {
+    if (raw === "" ) continue;
+    const line = document.createElement("span");
+    const clean = raw.replace(/\r/g, "");
+    if (PANIC.test(clean)) line.className = "panic";
+    const ts = document.createElement("span");
+    ts.className = "t";
+    ts.textContent = stamp() + "  ";
+    line.prepend(ts);
+    line.appendChild(document.createTextNode(clean));
+    frag.appendChild(line);
+    frag.appendChild(document.createTextNode("\n"));
+  }
+  logEl.appendChild(frag);
+  if ($("follow").checked && wasAtBottom) logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function readLoop() {
+  while (keepReading && port && port.readable) {
+    try {
+      reader = port.readable.getReader();
+    } catch (e) { break; }
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) append(new TextDecoder().decode(value));
+      }
+    } catch (e) {
+      if (keepReading) append("\nsys: read error - " + e.message + "\n");
+    } finally {
+      try { reader.releaseLock(); } catch (e) {}
+      reader = null;
+    }
+  }
+}
+
+async function connect() {
+  if (!("serial" in navigator)) {
+    append("\nsys: this browser has no Web Serial. Chrome or Edge, over https or localhost.\n");
+    return;
+  }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: Number($("baud").value) });
+    // The ESP32 auto-resets when DTR/RTS are asserted on open, which is how the
+    // serial monitor usually restarts it. Keeping them low means connecting does
+    // not disturb a machine that is running, which is the point here.
+    if ($("noreset").checked) {
+      try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch (e) {}
+    }
+    connected = true; keepReading = true;
+    $("connect").disabled = true; $("disconnect").disabled = false;
+    $("status").innerHTML = '<span class="dot on"></span>connected at ' + $("baud").value;
+    append("\nsys: port open at " + $("baud").value + " baud\n");
+    readLoop();
+  } catch (e) {
+    append("\nsys: could not open - " + e.message + "\n");
+    port = null;
+  }
+}
+
+async function disconnect() {
+  keepReading = false;
+  try { if (reader) await reader.cancel(); } catch (e) {}
+  try { if (port) await port.close(); } catch (e) {}
+  port = null; connected = false;
+  $("connect").disabled = false; $("disconnect").disabled = true;
+  $("status").innerHTML = '<span class="dot off"></span>disconnected';
+  append("\nsys: port closed\n");
+}
+
+function flash(btn, label) {
+  const old = btn.textContent;
+  btn.textContent = label; btn.classList.add("flash");
+  setTimeout(() => { btn.textContent = old; btn.classList.remove("flash"); }, 900);
+}
+
+$("connect").onclick = connect;
+$("disconnect").onclick = disconnect;
+$("clear").onclick = () => { logEl.textContent = ""; };
+$("baud").onchange = async () => {
+  if (!connected || !port) return;
+  const granted = port;               // keep the browser's grant across the reopen
+  const baud = Number($("baud").value);
+  await disconnect();                 // clears `port`, so hold the reference first
+  try {
+    port = granted;
+    await port.open({ baudRate: baud });
+    if ($("noreset").checked) { try { await port.setSignals({ dataTerminalReady: false, requestToSend: false }); } catch (e) {} }
+    connected = true; keepReading = true;
+    $("connect").disabled = true; $("disconnect").disabled = false;
+    $("status").innerHTML = '<span class="dot on"></span>connected at ' + baud;
+    append("\nsys: reopened at " + baud + " baud\n");
+    readLoop();
+  } catch (e) { append("\nsys: reopen failed - " + e.message + "\n"); port = null; }
+};
+
+$("copy").onclick = async () => {
+  const lines = logEl.textContent.split("\n");
+  const hits = lines.filter((l) => PANIC.test(l));
+  const payload = (hits.length ? hits.join("\n") : lines.slice(-80).join("\n"));
+  const note = hits.length
+    ? "--- the panic block (" + hits.length + " line(s)) ---\n"
+    : "--- no panic found, last 80 lines ---\n";
+  try {
+    await navigator.clipboard.writeText(note + payload);
+    flash($("copy"), "copied");
+  } catch (e) {
+    append("\nsys: clipboard blocked - select the text manually\n");
+  }
+};
+
+$("download").onclick = () => {
+  const blob = new Blob([logEl.textContent], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ossm-serial-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+
+append("sys: OSSM serial console ready. Click Connect and pick the board's port.\n");
+</script>
+</body>
+</html>

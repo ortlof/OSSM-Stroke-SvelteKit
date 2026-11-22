@@ -55,6 +55,7 @@ rm -f /tmp/osdb-schema.sql
 
 echo "== application =="
 install -m 0644 "$SRC/app.py" "$APP_DIR/app.py"
+install -m 0644 "$SRC/serial-console.html" "$APP_DIR/serial-console.html"
 install -m 0644 "$SRC/ossm-ingest.service" /etc/systemd/system/ossm-ingest.service
 # Single-quoted: systemd's EnvironmentFile and a shell `.` both stop at the first
 # unquoted space, which would leave the DSN as just "dbname=ossm".

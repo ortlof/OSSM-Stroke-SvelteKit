@@ -86,6 +86,10 @@ public:
     int uploadSent = 0;        // samples accepted by the server this session
     int uploadDropped = 0;     // samples dropped because the buffer was full
     String uploadError = "";   // last error, empty when the last request worked
+    // Free stack of the uploader task, from uxTaskGetStackHighWaterMark. This is
+    // the measurement that decides whether the task stack is big enough, and a
+    // stack overflow here is invisible from outside (it resets the device).
+    int uploadStackFree = 0;
 
 
     // usable_travel and sweep_start are derived, so they are not stored: a stored
@@ -126,6 +130,7 @@ public:
         root["upload_sent"] = state.uploadSent;
         root["upload_dropped"] = state.uploadDropped;
         root["upload_error"] = state.uploadError;
+        root["upload_stack_free"] = state.uploadStackFree;
     }
 
     static StateUpdateResult update(JsonObject &root, StrokeState &state, const String &originId)

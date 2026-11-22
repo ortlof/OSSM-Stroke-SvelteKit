@@ -84,12 +84,15 @@ void SessionUploadService::begin()
     _fsPersistence.readFromFS();
     _httpEndpoint.begin();
 
-    // 16 kB. The mbedTLS handshake is the heaviest stack user in this firmware:
-    // measured the hard way, at 8192 the device RESET during the handshake
-    // instead of failing, while at 10240 the same code failed gracefully with
-    // "SSL - Memory allocation failed". The Arduino TLS examples ask for this
-    // size for exactly this reason. DRAM is the constraint, so the ring buffer
-    // and the POST body are kept small to pay for it.
+    // 16 kB, and this number is a compromise the hardware forces: the mbedTLS
+    // handshake needs BOTH a deep stack AND one large contiguous heap allocation,
+    // and this task's stack comes out of that same DRAM. Measured: at 24576 the
+    // largest contiguous block fell from 42,996 to 34,804 and the handshake
+    // failed with "X509 - Certificate verification failed" even though the CA was
+    // correct; at 16384 it succeeds. At 16384 the task's own watermark is about
+    // 5 kB used, and it survives a stationary session. The ring buffer and the
+    // POST body are kept small for the same reason - every kilobyte of static
+    // buffer is a kilobyte the handshake cannot have.
     xTaskCreatePinnedToCore(taskEntry, "sessionUpload", 16384, this, 1, &_taskHandle, 0);
 }
 
@@ -198,9 +201,18 @@ void SessionUploadService::captureLoop()
             status = "recording";
         }
 
-        // The queued counter is published every tick on purpose: the state only
-        // emits an event when a value really changed, so an idle machine is
-        // silent and a running one shows the buffer breathing.
+        // The state only emits an event when a value really changed, so an idle
+        // machine stays silent. The counters are throttled below: publishing them
+        // on every tick doubles the event rate exactly when the engine is already
+        // pushing telemetry at 10 Hz, and nobody can read a counter that fast.
+        // Counters move slowly enough that once a second is generous; the state
+        // and the session id are published the moment they change.
+        const bool countersDue = (uint32_t)(millis() - _lastStatusPublishMs) >= 1000u;
+        if (countersDue)
+        {
+            _lastStatusPublishMs = millis();
+        }
+
         _strokeState->update([&](StrokeState &s)
                              {
             bool changed = false;
@@ -209,9 +221,17 @@ void SessionUploadService::captureLoop()
             if (s.uploadState != wantedState) { s.uploadState = wantedState; changed = true; }
             if (s.uploadError != wantedError) { s.uploadError = wantedError; changed = true; }
             if (s.uploadSession != _sessionId) { s.uploadSession = _sessionId; changed = true; }
+            if (!countersDue)
+            {
+                return changed ? StateUpdateResult::CHANGED : StateUpdateResult::UNCHANGED;
+            }
             if (s.uploadQueued != _ringCount) { s.uploadQueued = _ringCount; changed = true; }
             if (s.uploadSent != (int)_sentThisSession) { s.uploadSent = (int)_sentThisSession; changed = true; }
             if (s.uploadDropped != (int)_droppedThisSession) { s.uploadDropped = (int)_droppedThisSession; changed = true; }
+            // Measure, do not assume: this is the free stack of THIS task after
+            // the work of the tick, including any handshake it just ran.
+            const int stackFree = (int)uxTaskGetStackHighWaterMark(nullptr);
+            if (s.uploadStackFree != stackFree) { s.uploadStackFree = stackFree; changed = true; }
             return changed ? StateUpdateResult::CHANGED : StateUpdateResult::UNCHANGED; },
                              STROKE_ENGINE_ORIGIN);
 
@@ -262,8 +282,18 @@ void SessionUploadService::capture(const SessionUploadSettings &settings)
     sample.torquePct = directedPct;
     sample.forceN = directedPct * 3.8f;  // 100 % of rating is 380 N
     sample.direction = (int8_t)strokeTravelDirection;
-    strncpy(sample.servoState, servoState.c_str(), sizeof(sample.servoState) - 1);
-    sample.servoState[sizeof(sample.servoState) - 1] = '\0';
+    // Guard the copy: this runs while the machine moves and a session is open,
+    // which is when the heap is tightest, and strncpy() with a null source on an
+    // exhausted String is a crash rather than an error.
+    if (servoState.length() > 0)
+    {
+        strncpy(sample.servoState, servoState.c_str(), sizeof(sample.servoState) - 1);
+        sample.servoState[sizeof(sample.servoState) - 1] = '\0';
+    }
+    else
+    {
+        strncpy(sample.servoState, "?", sizeof(sample.servoState));
+    }
 
     _ringWrite = (_ringWrite + 1) % SESSION_UPLOAD_RING;
     if (_ringCount < SESSION_UPLOAD_RING)
