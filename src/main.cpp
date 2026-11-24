@@ -94,12 +94,18 @@ ESP32SvelteKit esp32sveltekit(&server, NUMBER_OF_ENDPOINTS);
 
 StrokeSettingsService strokeSettingsService(&server, &esp32sveltekit);
 StrokeStateService strokeStateService(&server, &esp32sveltekit);
+#if FT_TORQUE_TELEMETRY
 ModbusProbeService modbusProbeService(&server, &esp32sveltekit);
+#endif
 // The archive uploader only reads the other services: the stroke state for the
 // record control, the machine settings for the torque limits it records at the
 // start of a session, and the Modbus probe for the signed torque reading.
 SessionUploadService sessionUploadService(&server, &esp32sveltekit, &strokeStateService,
-                                          &strokeSettingsService, &modbusProbeService);
+                                          &strokeSettingsService
+#if FT_TORQUE_TELEMETRY
+                                          , &modbusProbeService
+#endif
+                                          );
 
 // ---------------------------------------------------------------------------
 // Motion
@@ -196,7 +202,9 @@ static void homingNotification(bool isHomed);
 static void telemetryCallback(float positionMm, float speedMmPerSecond, bool clipping);
 static void loadSettings();
 static void applyMotionTuning();
+#if FT_TORQUE_TELEMETRY
 static void applyTorqueLimits();
+#endif
 static void startHoming();
 static void applyStrokeStateToEngine(const String &originId);
 void syncStrokeStateTask(void *pvParameters);
@@ -332,6 +340,7 @@ static void applyMotionTuning()
 // engine runs: a pattern must not move the safety limit under the operator.
 // ---------------------------------------------------------------------------
 
+#if FT_TORQUE_TELEMETRY
 static void applyTorqueLimits()
 {
     StrokeSettings settings;
@@ -348,6 +357,7 @@ static void applyTorqueLimits()
 
     modbusProbeService.setTorqueLimits(forwardMag, reverseMag);
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // Homing: non blocking, the state service reports the progress
@@ -585,7 +595,9 @@ void syncStrokeStateTask(void *pvParameters)
         float stepsPerMm = (servoMotor.stepsPerMillimeter > 0.0f) ? servoMotor.stepsPerMillimeter : 1.0f;
         float rawMm = float(stepperDriver.getCurrentPosition()) / stepsPerMm;
         // The firmware's own step count, for the Modbus lost-step monitor.
+#if FT_TORQUE_TELEMETRY
         modbusFirmwareSteps = stepperDriver.getCurrentPosition();
+#endif
         float positionMm = roundf(rawMm * 10.0f) / 10.0f;
 
         // --- which way the carriage is going, for the signed torque readout ----
@@ -845,7 +857,9 @@ void setup()
     esp32sveltekit.begin();
     strokeSettingsService.begin();
     strokeStateService.begin();
+#if FT_TORQUE_TELEMETRY
     modbusProbeService.begin();
+#endif
     sessionUploadService.begin();
 
     // --- board ---
@@ -857,13 +871,18 @@ void setup()
     Stroker.begin(&strokingMachine, &servoMotor, &stepperDriver);
     Stroker.registerTelemetryCallback(telemetryCallback);
     applyMotionTuning();  // after begin(): it resets the factors to the defaults
+#if FT_TORQUE_TELEMETRY
     applyTorqueLimits();  // the drive does not keep the limits across a power cycle
+#endif
 
     // A change to the machine settings applies the tuning immediately.
     strokeSettingsService.addUpdateHandler([&](const String &originId)
                                            {
         applyMotionTuning();
-        applyTorqueLimits(); },
+#if FT_TORQUE_TELEMETRY
+        applyTorqueLimits();
+#endif
+    },
                                            false);
 
     // Command applier: runs on every state change that a client caused

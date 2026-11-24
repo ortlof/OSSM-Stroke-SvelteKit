@@ -1,6 +1,14 @@
 #ifndef ModbusProbeService_h
 #define ModbusProbeService_h
 
+// Position-derived axis direction: +1 outward, -1 home, 0 holding. Declared here
+// OUTSIDE the torque gate, because the session record's "direction" field remains
+// valid on open-loop builds too. Defined in main.cpp, written at 10 Hz from the
+// position delta. A plain volatile global, same reasoning as StrokeStateService.h.
+extern volatile int strokeTravelDirection;
+
+#if FT_TORQUE_TELEMETRY
+
 /*
  *   Modbus RTU link to the JMC iHSV57 servo drive.
  *
@@ -62,7 +70,6 @@
 // that decides what "outward" means, and the sign of the drive's encoder is not
 // established. Deriving the direction from the position makes the mapping true by
 // construction instead of by an assumption about wiring.
-extern volatile int strokeTravelDirection;
 
 // One drive on one point-to-point link: unit id 1, addressed directly.
 #define MODBUS_PROBE_UNIT 1
@@ -497,5 +504,7 @@ private:
     int _posAppliedCounts = -1;
     uint32_t _lastPollMs = 0;
 };
+
+#endif  // FT_TORQUE_TELEMETRY
 
 #endif  // ModbusProbeService_h

@@ -90,8 +90,10 @@ struct SessionUploadSample
     int64_t epochMs;
     float positionMm;
     float speedMm;
+#if FT_TORQUE_TELEMETRY
     float torquePct;   // signed by direction of travel: + outward, - towards home
     float forceN;      // the same reading as rack force
+#endif
     int8_t direction;  // +1 outward, -1 home, 0 holding
     char servoState[12];
 };
@@ -178,8 +180,11 @@ class SessionUploadService : public StatefulService<SessionUploadSettings>
 public:
     SessionUploadService(PsychicHttpServer *server, ESP32SvelteKit *sveltekit,
                          StrokeStateService *strokeState,
-                         StrokeSettingsService *machineSettings,
-                         ModbusProbeService *probe);
+                         StrokeSettingsService *machineSettings
+#if FT_TORQUE_TELEMETRY
+                         , ModbusProbeService *probe
+#endif
+                         );
 
     void begin();
 
@@ -200,7 +205,9 @@ private:
 
     StrokeStateService *_strokeState;
     StrokeSettingsService *_machineSettings;
+#if FT_TORQUE_TELEMETRY
     ModbusProbeService *_probe;
+#endif
 
     TaskHandle_t _taskHandle = nullptr;
 

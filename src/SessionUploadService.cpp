@@ -58,8 +58,11 @@ static void iso8601FromMs(int64_t epochMs, char *out, size_t len)
 
 SessionUploadService::SessionUploadService(PsychicHttpServer *server, ESP32SvelteKit *sveltekit,
                                            StrokeStateService *strokeState,
-                                           StrokeSettingsService *machineSettings,
-                                           ModbusProbeService *probe) : _httpEndpoint(
+                                           StrokeSettingsService *machineSettings
+#if FT_TORQUE_TELEMETRY
+                                           , ModbusProbeService *probe
+#endif
+                                           ) : _httpEndpoint(
                                                                             SessionUploadSettings::read,
                                                                             SessionUploadSettings::update,
                                                                             this,
@@ -74,8 +77,10 @@ SessionUploadService::SessionUploadService(PsychicHttpServer *server, ESP32Svelt
                                                                             sveltekit->getFS(),
                                                                             SESSION_UPLOAD_FILE_PATH),
                                                                         _strokeState(strokeState),
-                                                                        _machineSettings(machineSettings),
-                                                                        _probe(probe)
+                                                                        _machineSettings(machineSettings)
+#if FT_TORQUE_TELEMETRY
+                                                                        , _probe(probe)
+#endif
 {
 }
 
@@ -340,6 +345,7 @@ void SessionUploadService::capture(const SessionUploadSettings &settings)
         return;
     }
 
+#if FT_TORQUE_TELEMETRY
     int torqueFeedback = 0;
     _probe->read([&torqueFeedback](ModbusProbeState &p)
                  { torqueFeedback = p.tqFb; });
@@ -351,14 +357,17 @@ void SessionUploadService::capture(const SessionUploadSettings &settings)
     const float directedPct = (strokeTravelDirection == 0) ? rawPct
                                                      : (strokeTravelDirection > 0) ? fabsf(rawPct)
                                                                                    : -fabsf(rawPct);
+#endif
 
     SessionUploadSample &sample = _ring[_ringWrite];
     sample.uptimeMs = millis();
     sample.epochMs = _baseEpochMs + (int64_t)(millis() - _baseUptimeMs);
     sample.positionMm = positionMm;
     sample.speedMm = speedMm;
+#if FT_TORQUE_TELEMETRY
     sample.torquePct = directedPct;
     sample.forceN = directedPct * 3.8f;  // 100 % of rating is 380 N
+#endif
     sample.direction = (int8_t)strokeTravelDirection;
     // Guard the copy: this runs while the machine moves and a session is open,
     // which is when the heap is tightest, and strncpy() with a null source on an
@@ -557,6 +566,7 @@ bool SessionUploadService::flushSamples(const SessionUploadSettings &settings, b
             const SessionUploadSample &s = _ring[(oldest + i) % SESSION_UPLOAD_RING];
             char stamp[32];
             iso8601FromMs(s.epochMs, stamp, sizeof(stamp));
+#if FT_TORQUE_TELEMETRY
             written += snprintf(osdbBody + written, sizeof(osdbBody) - written,
                                 "%s{\"t\":\"%s\",\"uptime_ms\":%lu,\"position_mm\":%.2f,"
                                 "\"speed_mms\":%.2f,\"torque_pct\":%.2f,\"force_n\":%.2f,"
@@ -564,6 +574,14 @@ bool SessionUploadService::flushSamples(const SessionUploadSettings &settings, b
                                 (i == 0) ? "" : ",", stamp, (unsigned long)s.uptimeMs,
                                 s.positionMm, s.speedMm, s.torquePct, s.forceN,
                                 (int)s.direction, s.servoState);
+#else
+            written += snprintf(osdbBody + written, sizeof(osdbBody) - written,
+                                "%s{\"t\":\"%s\",\"uptime_ms\":%lu,\"position_mm\":%.2f,"
+                                "\"speed_mms\":%.2f,\"direction\":%d,\"servo_state\":\"%s\"}",
+                                (i == 0) ? "" : ",", stamp, (unsigned long)s.uptimeMs,
+                                s.positionMm, s.speedMm,
+                                (int)s.direction, s.servoState);
+#endif
         }
         written += snprintf(osdbBody + written, sizeof(osdbBody) - written, "]}");
 

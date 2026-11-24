@@ -1,3 +1,4 @@
+#if FT_TORQUE_TELEMETRY
 #include <ModbusProbeService.h>
 
 namespace
@@ -963,3 +964,4 @@ void ModbusProbeService::runPositionPoll(int positionRegister, int countsPerMm, 
         return StateUpdateResult::CHANGED; },
            MODBUS_PROBE_ORIGIN);
 }
+#endif  // FT_TORQUE_TELEMETRY

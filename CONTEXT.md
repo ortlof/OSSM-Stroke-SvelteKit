@@ -611,3 +611,23 @@ service over the internet rather than being pulled from it. That service is **LX
 - **The archive holds only real data now.** The empty test rows 6-11 were deleted on
   22 Nov 2026 (guarded on "no samples attached"); what remains is sessions 3 (159
   samples), 4 (200), 5 (606) and 12 (381).
+
+## Modular motor: open-loop builds via a compile-time torque gate
+
+FT_TORQUE_TELEMETRY=1 (default, ihsv57) / 0 (open-loop) plus FT_MOTOR_BACKEND=ihsv57|stepdir.
+When 0: ModbusProbeService.{h,cpp} (and ModbusRtu, the UART) are not linked, there is
+no instance, no applyTorqueLimits(), no /rest/modbusProbe, no firmware-step tap, and the
+session samples / archive row carry no torque keys. strokeTravelDirection moved OUT of the
+gated header: it is position-derived and the open-loop 'direction' field still needs it.
+Safety invariant: the dead-man and keepout are position-window based, never torque-based.
+
+Measured (build only, no flash): default 1,770,803 (90.1%, byte-identical to baseline);
+torque-off with OTA kept 1,750,655 (89.0%, -20,148 B); with FT_UPLOAD_FIRMWARE=0 too
+1,731,995 (88.1%, -38,808 B). nm: torque symbols 0 in the stepdir image. OTA is KEPT on
+every env (two-slot min_spiffs still fits with ~215 kB to spare). Retracted: stock
+no_ota.csv only gains ~+130 kB, not ~1.9 MB; no repartition needed.
+
+Unverified/open: archive schema tolerance for sessions with absent torque columns (osdb
+host unreachable when checked); /rest/features flag + UI torque-widget gating (interface
+rebuild); MotorConfigurationService port and per-design lib/boards/<name> (none named by
+Basti yet; do not invent them).
